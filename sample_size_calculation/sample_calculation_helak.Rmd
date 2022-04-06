@@ -1,0 +1,53 @@
+---
+title: "sample_calculation_helak"
+author: "Monika Helak"
+date: "4/7/2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r, echo = FALSE, fig.width=5, fig.height=2, fig.cap = "Power in relation to Sample Size"}
+N <- seq(80, 100, by=1)     
+pow<-numeric(length(N))
+
+lambda.control = 12.5 # this value comes from the pilot study (mean vase life in days)
+lambda.treated = 13.5 # we are interested in extension of the control mean by 2 days
+alpha = 0.05/14  # significance level (with Bonferroni correction)
+
+numberSimulation <- 10000
+pval <- numeric(numberSimulation) 
+
+set.seed(1234)
+for (j in N){
+  for (i in 1:numberSimulation){
+    controlGroup <- rpois(j, lambda = lambda.control)
+    treatedGroup <- rpois(j, lambda = lambda.treated)
+    simData <- data.frame(response = c(controlGroup, treatedGroup), treatment = rep(c(0, 1), each = j))
+    z <- summary(glm(response ~ treatment, data = simData, family=poisson()))$coeff["treatment", "z value"] 
+    if (z > 0) {                               # one sided alternative hypothesis
+      pval[i]<-pnorm(z, lower.tail = FALSE)    
+    }else{
+      pval[i]<- (1-pnorm(z, lower.tail = FALSE))
+    }
+  }
+  pow[j]<-sum(pval < alpha)/numberSimulation
+}
+
+sample.size<-tail(pow, n=length(N))
+
+plot.data = data.frame(x=N, y=sample.size)
+ggplot(data=plot.data, aes(x=x, y=y)) + 
+  geom_point() + 
+  geom_line() +
+  labs(x="Sample size, N", y="Power") + 
+  geom_hline(yintercept=0.8, linetype=1, col="red", size=1) +
+  geom_hline(yintercept=0.85, linetype=1, col="blue", size=0.5) +
+  theme_minimal() +
+  scale_x_continuous(breaks = N)
+
+
+```
