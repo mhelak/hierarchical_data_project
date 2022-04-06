@@ -1,0 +1,111 @@
+---
+title: "Analysis of the pilot data - PMHD - Group 6"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+library(dplyr)
+library(hrbrthemes)
+library(MASS)
+```
+
+## The data
+
+The data is loaded and visualized with a histogram.
+
+```{r}
+pilot.data <- read.csv("G6.pilot.data.csv")
+ggplot(data=pilot.data, aes(x=tot.vase.days)) +
+  geom_histogram(color="#e9ecef", alpha=0.6, position = 'identity', binwidth = 1)
+```
+
+\newpage
+
+## Plotting the histograms based on the different possible sources of variability
+
+Garden
+
+```{r}
+ggplot(data=pilot.data, aes(x=tot.vase.days, fill=as.factor(garden))) +
+  geom_histogram( color="#e9ecef", alpha=0.6, position = 'identity', binwidth = 1) +
+  facet_wrap(~as.factor(garden),ncol=1)
+```
+
+\newpage
+
+Species
+
+```{r}
+ggplot(data=pilot.data, aes(x=tot.vase.days, fill=as.factor(species))) +
+  geom_histogram( color="#e9ecef", alpha=0.6, position = 'identity', binwidth = 1) +
+  facet_wrap(~as.factor(species),ncol=1)
+```
+
+\newpage
+
+Rater
+
+```{r}
+ggplot(data=pilot.data, aes(x=tot.vase.days, fill=as.factor(rater))) +
+  geom_histogram( color="#e9ecef", alpha=0.6, position = 'identity', binwidth = 1) +
+  facet_wrap(~as.factor(rater),ncol=1)
+```
+
+\newpage
+
+## Estimation of the lambda parameter and confidence interval
+
+The lambda parameter is estimated by fitting the pilot data to a poisson distribution.
+
+```{r}
+parms <- fitdistr(pilot.data$tot.vase.days, "poisson")
+lambda.pilot <- parms$estimate
+sd_x     <- parms$sd
+confidence.interval.95 <- c(lambda.pilot + c(-1,1) * 1.96 * sd_x)
+lambda.pilot
+confidence.interval.95
+```
+
+\newpage
+
+## Simulation to calculate the sample size
+
+Simulation based on the code provided by the professor in the lecture of sample size calculation. 
+
+```{r}
+max.Sample.Size <- 300 # we evaluate all possible sample sizes up to 300
+power <- rep(0,max.Sample.Size) # initialization of the variable
+for (N in 1:max.Sample.Size){
+    # setting the lambda parameters of the two populations
+    lambda.control = lambda.pilot   # this value may come from pilot study
+    lambda.treated = lambda.pilot+1 # value of the control group plus the effect size
+    alpha = 0.05  # significance level
+    
+    # simulation of a high number of experiments and test
+    numberSimulation <- 1000
+    pval <- numeric(numberSimulation) # initialization of the variable 
+    
+    set.seed(1234) # set the seed for reproducible results
+    for (i in 1:numberSimulation){
+      # we simulate from Poisson distribution
+      controlGroup <- rpois(N, lambda = lambda.control)
+      treatedGroup <- rpois(N, lambda = lambda.treated)
+      simData <- data.frame(response = c(controlGroup, treatedGroup), treatment = rep(c(0, 1), each = N))
+      # we use a GLM model for Poisson regression to test effect of treatment
+      pval[i] <- summary(glm(response ~ treatment, data = simData, family=poisson()))$coeff["treatment", "Pr(>|z|)"]
+    }
+    
+    # Estimation of the power
+    power[N]<-sum(pval < alpha)/numberSimulation
+}
+# plotting the results
+sample.size <- 1:max.Sample.Size
+plot(sample.size, power,xlab = "sample size")
+abline(h=0.85, col="blue")
+results <- data.frame(sample.size,power)
+results
+```
+
+
