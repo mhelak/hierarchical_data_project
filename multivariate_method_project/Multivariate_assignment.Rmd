@@ -1,0 +1,112 @@
+---
+title: "Assignment: Canadian Weather - PMHD - Group 6"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(GrassmannOptim)
+library(dplyr)
+library(Matrix)
+library(ldr)
+```
+
+## The data
+
+The data is loaded.
+
+```{r}
+load("CanadianWeather.rda")
+da<-CanadianWeather[[1]]
+da<-da[,,"Precipitation.mm"] # precipitation data
+days<-1:365
+days<-(days-min(days))/(diff(range(days)))
+city.names <- colnames(da)
+head(da)
+```
+
+A polynomial fitting is performed. But first,  the optimal degree d for the polynomial function is determined.
+
+```{r}
+# Choose optimal m
+max.d <- 20
+mean.adj.Rsquared <- rep(0,max.d)
+mean.sum.square.resid <- rep(0,max.d)
+for (d in 1:max.d){
+  cities.adj.Rsquared <- rep(0,length(city.names))
+  sum.square.resid <- rep(0,length(city.names))
+  phi<-poly(days,degree=d)
+  for (city in 1:length(city.names)){
+    m <- lm(da[,city.names[city]]~phi)
+    cities.adj.Rsquared[city] <- summary(m)$adj.r.squared
+    sum.square.resid[city] <- deviance(m)
+  }
+  mean.adj.Rsquared[d] <- mean(cities.adj.Rsquared)
+  mean.sum.square.resid[d] <- mean(sum.square.resid)
+}
+
+plot(1:max.d,mean.adj.Rsquared,xlab = "model degree")
+plot(1:max.d,mean.sum.square.resid,xlab = "model degree")
+```
+
+We choose to work with a degree of 5. We plot the fit for Vancouver
+
+```{r}
+ m.Vancouver<- lm(da[,'Vancouver']~phi)
+plot(days,da[,'Vancouver'])
+lines(days,m.Vancouver$fitted.values,type="l", col=2)
+```
+
+and Quebec
+
+```{r}
+ m.Quebec<- lm(da[,'Quebec']~phi)
+plot(days,da[,'Quebec'])
+lines(days,m.Quebec$fitted.values,type="l", col=2)
+```
+
+Then the matrix with the cities and the corresponding parameters is generated.
+
+```{r}
+d <- 5
+phi<-poly(days,degree=d)
+parameters <- data.frame(matrix(0,length(city.names),d+1))
+for (city in 1:length(city.names)){
+  m <- lm(da[,city.names[city]]~phi)
+  parameters[city,] <- m$coefficients
+}
+colnames(parameters)<- attr(m$coefficients, "names")
+rownames(parameters)<-city.names
+parameters
+```
+
+The MSD is performed
+
+```{r}
+X<- parameters
+n<- nrow (X)
+H<- diag (n) -1/n* matrix (1, ncol =n, nrow =n)
+X[,]<-H%*%as.matrix(X)
+X.svd <- svd(X)
+k <-2
+Uk <-X.svd$u[ ,1:k]
+Dk <- diag(X.svd$d [1:k])
+Zk <-Uk%*%Dk
+rownames(Zk)<- rownames(parameters)
+Zk
+```
+
+And we plot the data
+
+```{r}
+plot (Zk , type ="n", xlab =" Z1", ylab =" Z2",xlim=c(-50,20))
+text (Zk , rownames (Zk),cex =0.7,)
+```
+
+Plotting for Pr Rupert 
+
+```{r}
+m.PrRupert<- lm(da[,'Pr. Rupert']~phi)
+plot(days,da[,'Pr. Rupert'])
+lines(days,m.PrRupert$fitted.values,type="l", col=2)
+```
