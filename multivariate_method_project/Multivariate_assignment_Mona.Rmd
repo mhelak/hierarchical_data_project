@@ -91,7 +91,7 @@ dim(parameters)
 The MSD is performed. First we apply the column centering on the parameters matrix, then we obtain the SVD of this matrix. 
 
 ```{r}
-# column centring of the matrix and applying SVD
+# column centering of the matrix and applying SVD
 parameters.mean<-colMeans(parameters)
 parameters<-scale(parameters,center = TRUE, scale = FALSE)
 parameters.svd<-svd(parameters)
@@ -114,12 +114,13 @@ abline(v=0,lty=2,col=4)
 abline(h=0,lty=2,col=4)
 ```
 
-from this graph it can be seen that the origin ((0, 0)) corresponds to the average precipitation/day function. The plot shows also that there are some cities with positive scores in the first dimension(e.g. Edmonton,Winnipeg, and Scheffervll). The city of Pr. Rupert has a large positive score in the second dimension but a large negative score in the first dimension.
-To better understand what large scores mean, we will back transform the SVD to the original function space.
+From this graph it can be seen that the origin ((0, 0)) corresponds to the average precipitation/day function. The plot shows also that there are some cities with positive scores in the first dimension (e.g. Edmonton, Winnipeg and Scheffervll). The city of Pr. Rupert has a large positive score in the second dimension but a large negative score in the first dimension.
+To better understand what large Z1 or Z2 scores mean, we will back transform the SVD to the original function space.
+
 ```{r}
-# right signular vectors (loadings)
+# right singular vectors (loadings)
 V<-parameters.svd$v[,1:2]
-# a vector with many points in the [0,1] interval.
+# a vector with many points in the [0,1] interval, that will be used for plotting
 days.plot<-seq(0,1,length.out = 100)
 # evaluate the polynomial basis functions at all these points
 phi.plot<-poly(days.plot,degree=10)
@@ -132,6 +133,7 @@ XV<-X %*% V
 # average precipitation/day function.
 mean.curve<-X%*%parameters.mean
 plot(days.plot,exp(mean.curve)-1, type="l")
+plot(days.plot,mean.curve, type="l")
 ```
 From the score plot we see that the scores in the first dimension vary between $-40$ and $+20$. Now we illustrated how changing the z-score in the first dimension will show the effect of this score and how it varies from the average curve.
 ```{r}
@@ -142,10 +144,18 @@ lines(days.plot*days.range,exp(mean.curve+XV[,1]*20)-1,col=4)
 lines(days.plot*days.range,exp(mean.curve-XV[,1]*10)-1,col=2)
 ```
 
-From the graph we may conclude that cities that have large negative score in the first dimension tends to have high precipitation amount in the period between the end of the year and the beginning of the new year. On the other hand, cities with positive score have their high precipitation in the middle of the year. Therefore, we may interpret the first dimension as a dimension related to the period of the highest precipitation amount for each city.
-looking at the score graph and combining it with this interpretation, we may conclude that particularly Pr. Rupert,Vancouver,Sydney have high precipitation at the end and the beginning of the year, while cities as Winnipeg, Pr.Alpert, and Regina have high precipitation in the middle of the year. 
+```{r}
+rng<-range(mean.curve-XV[,1]*10,mean.curve+XV[,1]*20)
+plot(days.plot*days.range,mean.curve,type="l",ylim=rng,
+     xlab="days of year", ylab="Precipitation.mm")
+lines(days.plot*days.range,mean.curve+XV[,1]*20,col=4)
+lines(days.plot*days.range,mean.curve-XV[,1]*10,col=2)
+```
 
-Now We repeat the procedure for the second dimension.
+From the graph we may conclude that cities that have large negative score in the first dimension tends to have high precipitation amount in the period between the end of the year and the beginning of the new year. On the other hand, cities with positive score have their high precipitation in the middle of the year. Therefore, we may interpret the first dimension as a dimension related to the period of the highest precipitation amount for each city.
+looking at the score graph and combining it with this interpretation, we may conclude that particularly Pr. Rupert, Vancouver, Sydney have high precipitation at the end and the beginning of the year, while cities as Edmonton, Winnipeg, Pr. Alpert and Regina have high precipitation in the middle of the year. 
+
+Now, we repeat the procedure for the second dimension.
 
 ```{r}
 rng<-exp(range(mean.curve-XV[,2]*10,mean.curve+XV[,2]*10))-1
@@ -154,6 +164,15 @@ plot(days.plot*days.range,exp(mean.curve)-1,type="l",ylim=rng,
 lines(days.plot*days.range,exp(mean.curve+XV[,2]*10)-1,col=4)
 lines(days.plot*days.range,exp(mean.curve-XV[,2]*10)-1,col=2)
 ```
+
+```{r}
+rng<-range(mean.curve-XV[,2]*10,mean.curve+XV[,2]*10)
+plot(days.plot*days.range,mean.curve,type="l",ylim=rng,
+     xlab="days of year", ylab="Precipitation.mm")
+lines(days.plot*days.range,mean.curve+XV[,2]*10,col=4)
+lines(days.plot*days.range,mean.curve-XV[,2]*10,col=2)
+```
+
 The graph may allow us to conclude that cities with large positive scores in the second dimension, have high overall amount of precipitation. While cities with large negative scores have lower overall amount of precipitation. From the score plot we can see that Pr.Rupert have the largest positive score in the second dimension, and therefore it may has the highest overall amount of precipitation.   
 
 
@@ -163,4 +182,21 @@ Plotting for Pr Rupert
 m.PrRupert<- lm(da[,"Pr. Rupert"]~phi)
 plot(1:365,da[,"Pr. Rupert"],main="Pr. Rupert", xlab="day", ylab="precipitation (mm/day)")
 lines(1:365,m.PrRupert$fitted.values,type="l", col=2)
+```
+
+
+Plotting for Edmonton 
+
+```{r}
+m.Edmonton<- lm(da[,"Edmonton"]~phi)
+plot(1:365,da[,"Edmonton"],main="Edmonton", xlab="day", ylab="precipitation (mm/day)")
+lines(1:365,m.Edmonton$fitted.values,type="l", col=2)
+```
+
+Plotting for Victoria 
+
+```{r}
+m.Victoria<- lm(da[,"Victoria"]~phi)
+plot(1:365,da[,"Victoria"],main="Victoria", xlab="day", ylab="precipitation (mm/day)")
+lines(1:365,m.Victoria$fitted.values,type="l", col=2)
 ```
