@@ -1,0 +1,354 @@
+---
+title: "Pilot data analysis"
+author: "Zane Kliesmete"
+date: "12/04/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(lme4)
+library(tidyverse)
+
+```
+
+## Data overview
+
+
+```{r ov}
+pilot<-read.csv("G6.pilot.data.csv") %>%
+    mutate(garden=as.factor(garden),
+         species=as.factor(species),
+         rater=as.factor(rater))
+
+ggplot(pilot, aes(x=tot.vase.days, fill=rater))+geom_density(alpha=0.4)+
+  facet_grid(species~.)
+
+ggplot(pilot, aes(x=tot.vase.days, fill=garden))+geom_density(alpha=0.4)+
+  facet_grid(species~.)
+
+
+```
+
+## Getting an estimate of predictor variable effects
+
+Ideally, we would fit the days as days ~ species + (1|garden) + (1|rater). I only use random intercepts model, because we do not have an idea whether the slopes would also differ.
+
+However, I get an error that the data is singular for the garden, which apparently means that the data is too little and model too complex to fit all effects OR the group-specific intercepts are very very tiny and it thus leads to the random intercepts of garden to be set to 0. Maybe someone wants to look deeper into the links provided by the first answer here https://stackoverflow.com/questions/60028673/lme4-error-boundary-singular-fit-see-issingular
+
+Also, I am only using the estimated betas and intercepts to simulate. Not sure how to put in something regarding variance, as (as far as I know) it's not like for LMs where there is an explicit error term. If you figure out a better way, I'd be obviously delighted :)
+
+Options: leave garden out or add it as a fixed effect for now (conservative).
+
+### Model 1: garden as a random intercept
+```{r modfit1}
+
+#version with garden as a random effect
+glm_out_orig <- glmer(tot.vase.days ~  species  + (1|garden) + (1|rater), family=poisson(link = "log"), data=pilot)
+summary(glm_out_orig)
+ranef(glm_out_orig)
+
+
+```
+
+### Model 2: no garden
+
+```{r modfit2}
+
+#version without garden
+glm_out_noGard <- glmer(tot.vase.days ~  species  + (1|rater), family=poisson(link = "log"), data=pilot)
+summary(glm_out_noGard)
+
+
+#this one allows to pull out the intercepts and use these directly for the simulations
+b_rater_noG <- ranef(glm_out_noGard)$rater %>%
+  as_tibble(rownames = 'r') %>%
+  dplyr::rename(int = `(Intercept)`)
+
+b0=fixef(glm_out_noGard)[1]
+b1=fixef(glm_out_noGard)[2]
+
+#simulate lambdas (still only ctrl) for balanced data 100 times, compare to group-wise lambdas in the actual data.
+
+N=100
+n=80
+df_noG<-data.frame(iteration=factor(), tot.vase.days=integer(), species=factor(), rater=factor(), type=character()) 
+
+for (i in 1:N){
+
+  Y0_s1_r1<-rpois(n/4, lambda=exp(b0  + b_rater_noG$int[b_rater_noG$r==1]))
+  Y0_s2_r1<-rpois(n/4, lambda=exp(b0 + b1 + b_rater_noG$int[b_rater_noG$r==1]))
+  Y0_s1_r2<-rpois(n/4, lambda=exp(b0  + b_rater_noG$int[b_rater_noG$r==2]))
+  Y0_s2_r2<-rpois(n/4, lambda=exp(b0 + b1 + b_rater_noG$int[b_rater_noG$r==2]))
+
+
+  new_df_balanced_noGard<-data.frame(species=as.factor(c(rep(1, n/4), rep(2, n/4), rep(1, n/4), rep(2, n/4))),
+                            rater=as.factor(c(rep(1, n/2), rep(2, n/2))),
+                            tot.vase.days=c(Y0_s1_r1,Y0_s2_r1,Y0_s1_r2,Y0_s2_r2),
+                            type="sim", iteration=factor(i)) 
+  
+  df_noG<-bind_rows(df_noG, new_df_balanced_noGard)
+  
+  }
+
+df_noG_balanced_summarised<-df_noG %>%
+  group_by(iteration, species, rater) %>%
+  summarise(mean.vase.days=mean(tot.vase.days)) %>%
+  group_by(species, rater) %>%
+  summarise(mean.lambda=mean(mean.vase.days),
+            CI.lambda = 1.96 * sqrt(mean.lambda/N)) %>%
+  mutate(type="sim") %>%
+  bind_rows(pilot %>% group_by(species, rater) %>% 
+              summarise(mean.lambda = mean(tot.vase.days),
+                        CI.lambda = 1.96 * sqrt(mean.lambda/40)) %>%
+              mutate(type="pilot")) %>%
+  pivot_wider(names_from = type, values_from = c(mean.lambda,CI.lambda))
+  
+  ggplot(df_noG_balanced_summarised, aes(x=mean.lambda_sim, y=mean.lambda_pilot))+
+    geom_abline(intercept=0, slope=1, linetype="dashed")+
+    geom_point()+
+    geom_errorbarh(aes(xmin=mean.lambda_sim-CI.lambda_sim,
+                      xmax=mean.lambda_sim+CI.lambda_sim))+
+    geom_errorbar(aes(ymin=mean.lambda_pilot-CI.lambda_pilot,
+                      ymax=mean.lambda_pilot+CI.lambda_pilot))+
+    geom_label(aes(label=paste0(species, rater)))
+  
+  
+  ggplot(df_noG %>% filter(iteration==10) %>% mutate(type="sim") %>% bind_rows(pilot %>% mutate(type="pilot")), 
+         aes(x=tot.vase.days, fill=rater))+
+    geom_density(alpha=0.4)+
+  facet_grid(type~species)
+
+
+  #calculation of ci for poisson distribution 
+  # https://stats.stackexchange.com/questions/15371/how-to-calculate-a-confidence-level-for-a-poisson-distribution 95% ci for lambda  𝜆̂ ±1.96 sqrt(𝜆̂ /𝑛)
+
+
+```
+
+### Model 3: garden as a main effect
+
+```{r modfit2}
+
+#version with garden as a fixed effect
+glm_out <- glmer(tot.vase.days ~  species  + garden + (1|rater), family=poisson(link = "log"), data=pilot)
+summary(glm_out)
+#exp(confint(glm_out, level = 0.90))
+
+#this one allows to pull out the intercepts and use these directly for the simulations
+b_rater <- ranef(glm_out)$rater %>%
+  as_tibble(rownames = 'r') %>%
+  dplyr::rename(int = `(Intercept)`)
+
+b0=fixef(glm_out)[1]
+b1=fixef(glm_out)[2]
+b2=fixef(glm_out)[3]
+
+#now if we want balanced data, it's 8 groups i guess
+
+N=100
+n=80
+
+df_withG<-data.frame(iteration=factor(), tot.vase.days=integer(), species=factor(), garden=factor(), rater=factor(), type=character()) 
+
+for (i in 1:N){
+
+  #need to add now the garden effects
+  Y0_s1_r1_g1<-rpois(n/8, lambda=exp(b0 + b_rater$int[b_rater$r==1]))
+  Y0_s1_r1_g2<-rpois(n/8, lambda=exp(b0 + b2 + b_rater$int[b_rater$r==1]))
+
+  Y0_s2_r1_g1<-rpois(n/8, lambda=exp(b0 + b1 + b_rater$int[b_rater$r==1]))
+  Y0_s2_r1_g2<-rpois(n/8, lambda=exp(b0 + b1 + b2 + b_rater$int[b_rater$r==1]))
+
+  Y0_s1_r2_g1<-rpois(n/8, lambda=exp(b0 + b_rater$int[b_rater$r==2]))
+  Y0_s1_r2_g2<-rpois(n/8, lambda=exp(b0 + b2 + b_rater$int[b_rater$r==2]))
+
+  Y0_s2_r2_g1<-rpois(n/8, lambda=exp(b0 + b1 + b_rater$int[b_rater$r==2]))
+  Y0_s2_r2_g2<-rpois(n/8, lambda=exp(b0 + b1 + b2 + b_rater$int[b_rater$r==2]))
+
+
+  new_df_balanced<-data.frame(species = as.factor(rep(c(rep(1, n/4), rep(2, n/4)), 2)), 
+                            rater = as.factor(c(rep(1, n/2), rep(2, n/2))),
+                            garden = as.factor(rep(c(rep(1, n/8), rep(2, n/8)), 4)),
+                            tot.vase.days=c(Y0_s1_r1_g1, Y0_s1_r1_g2, Y0_s2_r1_g1, Y0_s2_r1_g2, Y0_s1_r2_g1, Y0_s1_r2_g2, Y0_s2_r2_g1, Y0_s2_r2_g2),
+                            type="sim", iteration=factor(i)) 
+
+  df_withG<-bind_rows(df_withG, new_df_balanced)
+  
+  }
+
+
+#we would also like to know whether we recapitulate the variance..
+
+
+df_withG_balanced_summarised<-df_withG %>%
+  group_by(iteration, species, garden, rater) %>%
+  summarise(mean.vase.days=mean(tot.vase.days)) %>%
+  group_by(species, garden, rater) %>%
+  summarise(mean.lambda=mean(mean.vase.days),
+            CI.lambda = 1.96 * sqrt(mean.lambda/N)) %>%
+  mutate(type="sim") %>%
+  bind_rows(pilot %>% group_by(species, garden, rater) %>% 
+              summarise(mean.lambda = mean(tot.vase.days),
+                        CI.lambda = 1.96 * sqrt(mean.lambda/40)) %>%
+              mutate(type="pilot")) %>%
+  pivot_wider(names_from = type, values_from = c(mean.lambda,CI.lambda))
+  
+ggplot(df_withG_balanced_summarised, aes(x=mean.lambda_sim, y=mean.lambda_pilot))+
+    geom_abline(intercept=0, slope=1, linetype="dashed")+
+    geom_point()+
+    geom_errorbarh(aes(xmin=mean.lambda_sim-CI.lambda_sim,
+                      xmax=mean.lambda_sim+CI.lambda_sim))+
+    geom_errorbar(aes(ymin=mean.lambda_pilot-CI.lambda_pilot,
+                      ymax=mean.lambda_pilot+CI.lambda_pilot))+
+    geom_label(aes(label=paste0(species, garden, rater)))
+  
+  
+  ggplot(df_withG %>% filter(iteration==1) %>% mutate(type="sim") %>% bind_rows(pilot %>% mutate(type="pilot")), 
+         aes(x=tot.vase.days, fill=rater))+
+    geom_density(alpha=0.4)+
+  facet_grid(type~species)
+
+
+  #https://stats.stackexchange.com/questions/15371/how-to-calculate-a-confidence-level-for-a-poisson-distribution 95% ci for lambda  𝜆̂ ±1.96 sqrt(𝜆̂ /𝑛)
+
+```
+
+
+
+## Simulate and estimate power
+
+For now, used the most complex model (last one), since the group-wise lambdas seemed the best
+
+```{r powsim}
+
+#now simulate
+set.seed(6247555)
+
+n=400
+effect_size=1
+N=1000
+pow=1
+n_comparisons=14
+alpha=0.05
+alpha_corrected=alpha/n_comparisons
+
+sim_list<-list()
+
+while (pow>0.6){
+  values<-data.frame(pval=NA, beta_1=NA, CI_lower=NA, power=NA, CI_prop=NA) 
+  n=n-8
+  for(i in 1:N) {
+    
+    #need to add now the garden effects
+    Y0_s1_r1_g1<-rpois(n/8, lambda=exp(b0 + b_rater$int[b_rater$r==1]))
+    Y0_s1_r1_g2<-rpois(n/8, lambda=exp(b0 + b2 + b_rater$int[b_rater$r==1]))
+    
+    Y0_s2_r1_g1<-rpois(n/8, lambda=exp(b0 + b1 + b_rater$int[b_rater$r==1]))
+    Y0_s2_r1_g2<-rpois(n/8, lambda=exp(b0 + b1 + b2 + b_rater$int[b_rater$r==1]))
+    
+    Y0_s1_r2_g1<-rpois(n/8, lambda=exp(b0 + b_rater$int[b_rater$r==2]))
+    Y0_s1_r2_g2<-rpois(n/8, lambda=exp(b0 + b2 + b_rater$int[b_rater$r==2]))
+    
+    Y0_s2_r2_g1<-rpois(n/8, lambda=exp(b0 + b1 + b_rater$int[b_rater$r==2]))
+    Y0_s2_r2_g2<-rpois(n/8, lambda=exp(b0 + b1 + b2 + b_rater$int[b_rater$r==2]))
+    
+    
+    #need to add now the garden effects
+    Y0_s1_r1_g1_e<-rpois(n/8, lambda=exp(b0 + b_rater$int[b_rater$r==1])+effect_size)
+    Y0_s1_r1_g2_e<-rpois(n/8, lambda=exp(b0 + b2 + b_rater$int[b_rater$r==1])+effect_size)
+    
+    Y0_s2_r1_g1_e<-rpois(n/8, lambda=exp(b0 + b1 + b_rater$int[b_rater$r==1])+effect_size)
+    Y0_s2_r1_g2_e<-rpois(n/8, lambda=exp(b0 + b1 + b2 + b_rater$int[b_rater$r==1])+effect_size)
+    
+    Y0_s1_r2_g1_e<-rpois(n/8, lambda=exp(b0 + b_rater$int[b_rater$r==2])+effect_size)
+    Y0_s1_r2_g2_e<-rpois(n/8, lambda=exp(b0 + b2 + b_rater$int[b_rater$r==2])+effect_size)
+    
+    Y0_s2_r2_g1_e<-rpois(n/8, lambda=exp(b0 + b1 + b_rater$int[b_rater$r==2])+effect_size)
+    Y0_s2_r2_g2_e<-rpois(n/8, lambda=exp(b0 + b1 + b2 + b_rater$int[b_rater$r==2])+effect_size)
+    
+    #sorry for this ugliness, did not have a chance to make it shorter and prettier. just check the resulting df, should yield a balanced table.. 
+    new_df_balanced_eff<-data.frame(species = as.factor(rep(c(rep(1, n/4), rep(2, n/4)), 4)), 
+                                    rater = as.factor(rep(c(rep(1, n/2), rep(2, n/2)), 2)),
+                                    garden = as.factor(rep(c(rep(1, n/8), rep(2, n/8)), 8)),
+                                    tot.vase.days=c(Y0_s1_r1_g1, Y0_s1_r1_g2, Y0_s2_r1_g1,
+                                                    Y0_s2_r1_g2, Y0_s1_r2_g1, Y0_s1_r2_g2,
+                                                    Y0_s2_r2_g1, Y0_s2_r2_g2,Y0_s1_r1_g1_e,
+                                                    Y0_s1_r1_g2_e, Y0_s2_r1_g1_e, Y0_s2_r1_g2_e,
+                                                    Y0_s1_r2_g1_e, Y0_s1_r2_g2_e, Y0_s2_r2_g1_e, 
+                                                    Y0_s2_r2_g2_e),
+                                    type="sim", condition=c(rep("ctrl",n), rep("compound1", n))) %>% mutate(condition=factor(condition, levels=c("ctrl","compound1")))
+    
+    glm_out_cond <- glmer(tot.vase.days ~ condition + species + garden + (1|rater), family=poisson, data=new_df_balanced_eff)
+    cc <- coef(summary(glm_out_cond))
+
+    values[i,2]<-exp(cc[2,1]) #getting beta 1 (condition)
+    values[i,1]<-cc[2,4]/2 #getting 1-sided pvalue 
+    #values[i,3]<-exp(confint(glm_out_cond, level = 0.90))[3,1]
+    
+  } 
+  signif=values %>% filter(pval<alpha_corrected) 
+  pow = dim(signif)[1]/dim(values)[1]
+  values$power<-pow
+  
+  #largeB=values %>% filter(CI_lower>=1) 
+  #betaConf = dim(largeB)[1]/dim(values)[1]
+  #values$CI_prop<-betaConf
+  
+  sim_list[[paste0("n",n)]]<-values
+  
+}
+
+sim_df<-bind_rows(sim_list, .id="n")
+
+```
+
+
+
+## Visualize power and betas
+```{r powsim}
+
+sim_summarized<-sim_df %>%
+  dplyr::group_by(n) %>%
+  dplyr::summarise(mean_beta_1=mean(beta_1),
+            power=power[1],
+            n=n[1]) %>%
+  dplyr::mutate(n=as.integer(gsub("n","",n))) 
+
+  ggplot(sim_summarized, aes(x=n, y=power))+geom_hline(yintercept = 0.85)+geom_point()
+  sim_summarized %>% filter(power>0.85) %>% slice_min(n) #332: 166 per group.
+
+  #n = 160 per group....?
+
+```
+
+## Multiple testing correction
+
+
+## See what a simulation package fo lme4 says
+
+
+```{r simr}
+
+library(simr)
+
+powerSim(glm_out_orig)
+
+#version with garden as a fixed effect
+glm_out <- glmer(tot.vase.days ~  species  + garden + (1|rater), family=poisson(link = "log"), data=pilot)
+summary(glm_out)
+
+powerSim(glm_out)
+
+
+#now my simulated data
+
+
+#one can extend the random predictor, f.e. rater to 7 
+
+glm_out_7rater<-extend(glm_out, along="rater", n=7)
+
+
+
+```
