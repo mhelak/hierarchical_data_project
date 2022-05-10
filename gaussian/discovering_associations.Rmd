@@ -1,0 +1,140 @@
+---
+title: "Discovering Associations"
+output: pdf_document
+author: "Monika Helak"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r, include = FALSE}
+#load packages
+library(vcd)
+library(data.table)
+library(tidyr)
+library(ggplot2)
+library(nlme)
+```
+
+
+```{r, include = FALSE}
+#read in data
+path <- 'count_data_G6.csv'
+d <- fread(path)
+g <- fread('gaussian_data_G6.csv')
+```
+
+Checking the distribution of the Vase Days of the count data. It looks like there is a larger degree of overdispersion than the poisson model currently accounts for.
+
+```{r, fig.width=6, fig.height=4 }
+gf <- goodfit(d$tot.vase.days, "poisson")
+plot(gf, type="standing", scale="raw")
+```
+
+
+
+Gaussian outcome data. We received data from 180 flowers. This was distributed as 12 flowers for each compound for each of the 15 compounds. In each of those groups, there were 6 flowers per species and 6 grown in each garden. There were also 18 different subplots. The number of subplots is greater than the number of number of flowers per group. 
+
+For each of the 18 flowers, we have measurements of the width of the flower over the course of 21 days. All measurements for all flowers were taken by a single rater.
+
+Below I transform the data so that there is a row for each measurement of each flower on each day resulting in 3780 rows. 
+
+```{r, message=FALSE, fig.width=8, fig.height=5}
+g$Flower_index<-factor(g$Flower_index)
+
+colnames(g)<-c("Flower_index",0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,"Compound","Rater","Type","Garden","Subplot")
+
+dataG_long <- gather(g, Days, Width, "0":"20", factor_key=TRUE)
+
+
+dataG_long$Garden<-as.factor(dataG_long$Garden)
+dataG_long$Type<-as.factor(dataG_long$Type)
+dataG_long$Compound<-as.factor(dataG_long$Compound)
+dataG_long$Subplot<-as.factor(dataG_long$Subplot)
+dataG_long$Rater<-as.factor(dataG_long$Rater)
+dataG_long$Days<-as.numeric(dataG_long$Days)
+
+head(dataG_long)
+```
+I also added a column showing the change in the width of the flower so that we can see the change in width per day. It is worth noting that the width of the flower does not uniformly increase, instead it does fluctuate from day to day, decreasing occasionally. Also, there are quite a few missing measurements, we probably should have accounted for this in our sample size calculation?
+
+```{r, include = FALSE}
+dataG_combo <- data.table(Flower_index = character(), 
+                          Compound = character(), 
+                          Rater = character(),
+                          Type = character(),
+                          Garden = character(),
+                          Subplot = character(),
+                          Days = integer(),
+                          Width = numeric(),
+                          delta_Width = numeric())
+
+unique_flower_ids <- unique(dataG_long$Flower_index)
+for (i in unique_flower_ids) {
+dataG_subset <- dataG_long[dataG_long$Flower_index == i,]
+dataG_subset$delta_Width <- c(0,diff(dataG_subset$Width))
+dataG_combo <- dplyr::union(dataG_combo, dataG_subset)
+}
+```
+
+```{r}
+
+hist(dataG_combo$Width)
+
+```
+
+```{r}
+
+hist(dataG_combo$delta_Width)
+
+```
+
+
+
+Below I plotted the mean width of the flower by day by compound on a given day. 
+
+```{r}
+data_cc <- aggregate(Width ~ Compound + Days, data = dataG_combo, FUN = mean)
+
+plot <- ggplot(data = data_cc)+
+    geom_line(aes(x = Days, y = Width, color = Compound)) 
+   
+plot
+```
+
+The takeaway from this graph is that for each graph, the change in the Width of the flower is not the same for each of the Compounds. Does this mean we have an interaction between Compound and Days?
+
+
+The same but for change in width of the flower does not reveal much.
+
+```{r}
+  ggplot(data = dataG_combo) +
+  geom_point(aes(x = Days, y = delta_Width, color = Compound))
+    
+
+```
+
+```{r}
+data_ccc<- aggregate(delta_Width ~ Compound + Days, data = dataG_combo, FUN = mean)
+
+plot <- ggplot(data = data_ccc)+
+    geom_line(aes(x = Days, y = delta_Width, color = Compound)) 
+   
+plot
+```
+I fit a linear model to the gaussian outcome data where Compound, Type, Garden and Days are included as fixed effects, a compound and days interaction is included and subplot is included as a random effect. Rater is not included because we only have one rater. 
+
+```{r}
+#g1 <- glm(Width ~ Compound + Type + Garden + Days + Compound*Days + (1 | Subplot), data=dataG_long)
+g1 <- nlme::lme(Width ~ Compound + Type + Garden + Days + Compound*Days, data=dataG_long, random = ~1|Subplot, na.action=na.omit)
+```
+
+Probably not right, this output is too long.
+```{r}
+summary(g1)
+
+```
+
+
