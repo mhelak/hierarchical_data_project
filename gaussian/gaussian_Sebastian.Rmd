@@ -1,0 +1,152 @@
+---
+title: "Discovering Associations"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r, include = FALSE}
+#load packages
+library("lme4")
+library(vcd)
+library(data.table)
+library(tidyr)
+library(ggplot2)
+library(nlme)
+```
+
+The data is loaded and manipulated
+
+```{r}
+#read in data
+path <- 'count_data_G6.csv'
+d <- fread(path)
+g <- fread('gaussian_data_G6.csv')
+```
+
+```{r, include=FALSE}
+gOld=g
+```
+
+```{r, include=FALSE, message=FALSE, fig.width=8, fig.height=5}
+g$Flower_index<-factor(g$Flower_index)
+
+colnames(g)<-c("Flower_index",0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,"Compound","Rater","Type","Garden","Subplot")
+
+dataG_long <- gather(g, Days, Width, "0":"20", factor_key=TRUE)
+
+
+dataG_long$Garden<-as.factor(dataG_long$Garden)
+dataG_long$Type<-as.factor(dataG_long$Type)
+dataG_long$Compound<-as.factor(dataG_long$Compound)
+dataG_long$Subplot<-as.factor(dataG_long$Subplot)
+dataG_long$Rater<-as.factor(dataG_long$Rater)
+dataG_long$Days<-as.numeric(dataG_long$Days)
+
+head(dataG_long)
+```
+
+
+```{r, include = FALSE}
+dataG_combo <- data.table(Flower_index = character(), 
+                          Compound = character(), 
+                          Rater = character(),
+                          Type = character(),
+                          Garden = character(),
+                          Subplot = character(),
+                          Days = integer(),
+                          Width = numeric(),
+                          delta_Width = numeric())
+
+unique_flower_ids <- unique(dataG_long$Flower_index)
+for (i in unique_flower_ids) {
+dataG_subset <- dataG_long[dataG_long$Flower_index == i,]
+dataG_subset$delta_Width <- c(0,diff(dataG_subset$Width))
+dataG_combo <- dplyr::union(dataG_combo, dataG_subset)
+}
+```
+
+
+Below I plotted the mean width of the flower by day by compound on a given day. 
+
+```{r}
+data_cc <- aggregate(Width ~ Compound + Days, data = dataG_combo, FUN = mean)
+
+plot <- ggplot(data = data_cc)+
+    geom_line(aes(x = Days, y = Width, color = Compound)) 
+   
+plot
+```
+
+A similar plot is performed, but in this case as a boxplot of the width at the day 20. This allows a bit more clearly to see the number of the compound.
+
+
+```{r}
+gOld$Compound=as.factor(gOld$Compound)
+ggplot(data=gOld, aes(x=Compound,y=T_20))+
+  geom_boxplot()+ylab("Width at day 20 (cm)")
+```
+
+To compare the gaussian data with the Poisson data, we plot a similar boxplot for the total vase days.
+
+```{r}
+ggplot(data=d, aes(x=as.factor(compound),y=tot.vase.days))+
+  geom_boxplot()+ylab("Total vase days")
+```
+
+
+A combined table is generated with the mean values of the two previous boxplots. 
+
+```{r}
+g.data.table=as.data.table(gOld)
+g.data.table$Compound=as.factor(g.data.table$Compound)
+g.data.table=na.omit(g.data.table, cols="T_20")
+summary <- g.data.table[,.(MeanWidth=mean(T_20)),.(Compound)]
+d.data.table=as.data.table(d)
+d.data.table=na.omit(d.data.table, cols="tot.vase.days")
+d.data.table$Compound=as.factor(d.data.table$compound)
+summary2 <- d.data.table[,.(MedianVaseDays=median(tot.vase.days)),.(Compound)]
+summary <- summary[summary2, on = .(Compound)]
+summary
+```
+
+And then plotted
+
+```{r}
+ggplot(data = summary,aes(x = MeanWidth, y = MedianVaseDays,color = Compound))+
+    geom_point()+xlab("Mean width at day 20 (cm)")+ylab("Median vase days")
+```
+
+A mixed model is fitted
+
+
+```{r}
+d$bushID<-as.factor(d$bushID)
+d$compound<-as.factor(d$compound)
+d$garden<-as.factor(d$garden)
+d$species<-as.factor(d$species)
+d$rater<-as.factor(d$rater)
+m1 <-glmer(tot.vase.days~compound+species+garden+(1|rater)+(1|bushID)+(1|subplotID), family=poisson(link = "log"), data=d,na.action=na.omit)
+summary(m1)
+```
+
+
+And we plot the compund effect based on the model and compare it with the width data.
+
+```{r}
+gOld2=as.data.table(gOld)
+gOld2=na.omit(gOld2, cols="T_20")
+gOld2=gOld2[,]
+gSummary <- gOld2[,.(Mean=mean(T_20)),.(Compound)]
+coefficients=summary(m1)$coefficients
+coefficients=coefficients[c(1:15)]
+coefficients=coefficients+coefficients[1]
+coefficients[1]=coefficients[1]/2
+gSummary$betas=coefficients
+gSummary$Compound=as.factor(gSummary$Compound)
+ggplot(data = gSummary,aes(x = Mean, y = betas,color = Compound))+
+    geom_point()+xlab("Mean width at day 20 (cm)")+ylab("Compound effect based on the mixed model")
+```
