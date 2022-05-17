@@ -1,0 +1,317 @@
+---
+title: "Discovering Associations"
+output: pdf_document
+author: "Zane Kliesmete"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r, include = FALSE}
+#load packages
+library(vcd)
+library(data.table)
+library(tidyverse)
+library(ggplot2)
+library(nlme)
+library(lme4)
+```
+
+## Count data of rose vase life days. 
+
+### Poisson-mixed effects modelling. 
+
+Out of 1440 datapoints, we have 60 missing outcomes (total vase days), which is 4.1% of the data.
+More data description, can copy some from simulation description.
+
+```{r, include = FALSE}
+#read in data
+d <- fread('count_data_G6.csv') %>%
+    mutate(garden=as.factor(garden),
+         species=as.factor(species),
+         rater=as.factor(rater),
+         compound=as.factor(compound),
+         subplotID=as.factor(subplotID),
+         bushID=as.factor(bushID)) %>%
+  na.omit()
+```
+
+Checking the distribution of the Vase Days of the count data. It looks like there is a larger degree of overdispersion than the poisson model currently accounts for (nope, it's just conditional on the compound: the goodfit should be done per compound).
+
+
+```{r, fig.width=6, fig.height=4 }
+
+ggplot(d, aes(x=tot.vase.days, fill=compound))+geom_histogram(alpha=0.7)+facet_wrap(~compound, ncol=5)+theme(legend.position = "none")
+#ggplot(d %>% filter(compound %in% c(1, 6, 14)), aes(x=tot.vase.days, fill=as.factor(compound)))+geom_density(alpha=0.3)
+
+# d %>% group_by(compound) %>% 
+#   dplyr::summarise(mean=mean(tot.vase.days),
+#                    var=var(tot.vase.days)) %>%
+#   ggplot(aes(x=mean, y=var))+
+#   geom_abline(slope=1, intercept=0)+
+#   geom_point()
+
+
+gf <- goodfit(d$tot.vase.days[d$compound==6], "poisson")
+plot(gf, type="standing", scale="raw") #I guess the fit would be better if we did it per compound
+```
+
+```{r, glmer}
+
+#inspired by the first answer here for nested data formulation https://stats.stackexchange.com/questions/228800/crossed-vs-nested-random-effects-how-do-they-differ-and-how-are-they-specified
+
+glmer_out <- glmer(tot.vase.days ~ compound + species + garden + (1|subplotID/bushID), family=poisson(link = "log"), data=d)
+
+glmer_coefficients<-as.data.frame(summary(glmer_out)$coeff) %>%
+  rownames_to_column("predictor") %>%
+  filter(grepl("compound",predictor)) %>%
+  dplyr::rename(pval=`Pr(>|z|)`) %>%
+  #we want to have p-adjusted (Holm) values for one-sided test H.alt: lambda(compound)>lambda(water)
+  dplyr::mutate(one_sided_pval=ifelse(`z value`>0, pval/2, (1-pval/2)),
+         p_adjusted=p.adjust(one_sided_pval, method="holm"),
+         significant_higher=ifelse(p_adjusted<0.05, T, F))
+
+ggplot(glmer_coefficients %>%
+         mutate(compound=factor(gsub("compound","",predictor), levels=2:15)), 
+       aes(x=compound, y=Estimate, color=p_adjusted<0.05))+
+  geom_hline(yintercept=0, linetype="dashed")+
+  geom_errorbar(aes(ymin=Estimate - `Std. Error`, ymax=Estimate +`Std. Error`), width=0.2)+geom_point(size=3)+theme_bw()+
+  scale_color_manual(values=c("#85ADAC","#555B6E"))
+         
+```
+
+Conclusion: compounds 6 and 14 significantly increase rose vase days (mention estimates +- sd error, also backcalculated in days, alpha, one-sided Wald test, maybe the exact z and p-values, correction Holm).
+
+### Binomial longitudinal modelling. 
+
+Fit a longitudinal binary data predicting vase life. First need to transform the data into a binary outcome per day.
+
+```{r lonitudinal_binary}
+
+outmat<-matrix(nrow = nrow(d), ncol=max(d$tot.vase.days))
+
+outmat[is.na(outmat)]<-1
+for (i in 1:nrow(outmat)){
+  outmat[i,c(d[i,tot.vase.days]:25)]<-0
+}
+
+outdf<-as.data.frame(outmat)
+names(outdf)<-paste0("newVar_",names(outdf))
+
+d_full<-d %>%
+  bind_cols(outdf %>% as.data.frame()) %>%
+  pivot_longer(contains("newVar"), names_to="day", values_to = "fresh") %>%
+  mutate(day=as.numeric(gsub("newVar_V","",day)))
+
+
+data_full_cc <- aggregate(fresh ~ compound + day, data = d_full, FUN = mean) %>%
+  mutate(water=ifelse(compound==1,T,F))
+
+ggplot(data = data_full_cc)+
+  geom_hline(yintercept=0.5, linetype="dashed")+
+    geom_line(aes(x = day, y = fresh, color = compound, size=water, alpha=water)) +
+  scale_size_discrete(range=c(0.8,1.5),guide="none")+
+  scale_alpha_discrete(range=c(0.65,1), guide="none")+
+  theme_bw()+
+  ylab("Proportion of fresh flowers")+
+  xlab("Day")
+
+#included this just to see if all datapoints are there..
+#ggplot(data = data_full_cc)+geom_line(aes(x = day, y = fresh, color = compound))+facet_wrap(~compound)
+
+
+```
+
+
+```{r bn}
+
+#d_full$fresh<-factor(d_full$fresh, levels=c(1,0))
+#d_full$fresh<-relevel(d_full$fresh, ref=1)
+glmer_out_bn <- glmer(fresh ~ compound + day + compound*day + species + garden + (1|rater) + (1|subplotID/bushID), family=binomial, data=d_full)
+
+summary(glmer_out_bn)
+
+
+glmer_bn_coefficients<-as.data.frame(summary(glmer_out_bn)$coeff) %>%
+  rownames_to_column("predictor") %>%
+  filter(grepl("compound",predictor)) %>%
+  filter(grepl("day",predictor)) %>%
+  dplyr::rename(pval=`Pr(>|z|)`) %>%
+  #we want to have p-adjusted (Holm) values for one-sided test
+  #however in this case it's the moe the day decreases, the more the probability of 1 should increase--> we're looking for highest neg associations:
+  #H.alt: lambda(compound)<lambda(water)
+  dplyr::mutate(one_sided_pval=ifelse(`z value`>0, pval/2, (1-pval/2)),
+         p_adjusted=p.adjust(one_sided_pval, method="holm"),
+         significant_lower=ifelse(p_adjusted<0.05, T, F))
+
+ggplot(glmer_bn_coefficients %>%
+         mutate(compound=factor(gsub("compound|:day","",predictor), levels=2:15)), 
+       aes(x=compound, y=Estimate, color=p_adjusted<0.05))+
+  geom_hline(yintercept=0, linetype="dashed")+
+  geom_errorbar(aes(ymin=Estimate - `Std. Error`, ymax=Estimate +`Std. Error`), width=0.2)+geom_point(size=3)+theme_bw()+
+  scale_color_manual(values=c("#85ADAC","#555B6E"))
+
+
+```
+
+
+## Gaussian data of flower width.
+
+Gaussian outcome data. We received data from 180 flowers. This was distributed as 12 flowers for each compound for each of the 15 compounds. In each of those groups, there were 6 flowers per species and 6 grown in each garden. There were also 18 different subplots. The number of subplots is greater than the number of number of flowers per group. 
+
+For each of the 18 flowers, we have measurements of the width of the flower over the course of 21 days. All measurements for all flowers were taken by a single rater.
+
+Below I transform the data so that there is a row for each measurement of each flower on each day resulting in 3780 rows. 
+
+```{r, message=FALSE, fig.width=8, fig.height=5}
+
+g <- fread('gaussian_data_G6.csv') 
+summary(g) #there is only one rater, drop it
+g<-g %>% dplyr::select(-Rater)
+
+
+colnames(g)<-c("flowerID",0:20,"compound","type","garden","subplot")
+
+dataG_long <- gather(g, days, width, "0":"20", factor_key=TRUE) %>%
+      mutate(garden=as.factor(garden),
+             type=as.factor(type),
+             compound=as.factor(compound),
+             subplot=as.factor(subplot),
+             days=as.numeric(days),
+             flowerID=as.factor(flowerID))
+
+head(dataG_long)
+```
+I also added a column showing the change in the width of the flower so that we can see the change in width per day. It is worth noting that the width of the flower does not uniformly increase, instead it does fluctuate from day to day, decreasing occasionally. Also, there are quite a few missing measurements, we probably should have accounted for this in our sample size calculation?
+
+```{r, include = FALSE}
+dataG_combo <- data.table(flowerID = factor(), 
+                          compound = factor(), 
+                          type = factor(),
+                          garden = factor(),
+                          subplot = factor(),
+                          days = integer(),
+                          width = numeric(),
+                          delta_width = numeric())
+
+unique_flowerIDs <- unique(dataG_long$flowerID)
+for (i in unique_flowerIDs) {
+  dataG_subset <- dataG_long[dataG_long$flowerID == i,]
+  dataG_subset$delta_width <- c(0,diff(dataG_subset$width))
+  dataG_combo <- dplyr::union(dataG_combo, dataG_subset)
+}
+```
+
+```{r}
+
+hist(dataG_combo$width)
+
+```
+
+```{r, include=F, eval=F}
+
+hist(dataG_combo$delta_width)
+
+```
+
+
+
+Below I plotted the mean width of the flower by day by compound on a given day. 
+
+```{r}
+
+data_cc <- aggregate(width ~ compound + days, data = dataG_combo, FUN = mean) %>%
+  mutate(water=ifelse(compound==1,T,F))
+
+ggplot(data = data_cc)+
+    geom_line(aes(x = days, y = width, color = compound, size=water, alpha=water)) +
+  scale_size_discrete(range=c(0.8,1.5),guide="none")+
+  scale_alpha_discrete(range=c(0.65,1), guide="none")+
+  theme_bw()+
+  ylab("Flower width")+
+  xlab("Day")
+
+#ggplot(data = data_cc %>% filter(compound %in% c(1, 6, 14)))+
+#    geom_line(aes(x = days, y = width, color = compound)) 
+```
+
+The takeaway from this graph is that for each graph, the change in the Width of the flower is not the same for each of the Compounds. Does this mean we have an interaction between Compound and Days?
+
+
+
+```{r, eval=F}
+data_ccc<- aggregate(delta_width ~ compound + days, data = dataG_combo, FUN = mean)
+
+plot <- ggplot(data = data_ccc)+
+    geom_line(aes(x = days, y = delta_width, color = compound)) 
+   
+plot
+```
+I fit a linear model to the gaussian outcome data where Compound, Type, Garden and Days are included as fixed effects, a compound and days interaction is included and subplot is included as a random effect. Rater is not included because we only have one rater. 
+
+```{r}
+
+#g1 <- glm(Width ~ Compound + Type + Garden + Days + Compound*Days + (1 | Subplot), data=dataG_long)
+lme_out <- nlme::lme(width ~ compound + type + garden + days + compound*days, data=dataG_long, random = ~1|subplot/garden, na.action=na.omit)
+```
+
+Probably not right, this output is too long.
+```{r, include=F}
+summary(lme_out)
+
+```
+```{r, lme}
+
+lme_coefficients<-as.data.frame(summary(lme_out)$tTable) %>%
+  rownames_to_column("predictor_full") %>%
+  filter(grepl("compound",predictor_full)) %>%
+  filter(grepl("days",predictor_full)) %>%
+  dplyr::rename(pval=`p-value`) %>%
+  #we want to have p-adjusted (Holm) values for one-sided test H.alt: lambda(compound)>lambda(water)
+  dplyr::mutate(one_sided_pval=ifelse(`t-value`<0, pval/2, (1-pval/2)),
+         p_adjusted=p.adjust(one_sided_pval, method="holm"),
+         significant_lower=ifelse(p_adjusted<0.05, T, F),
+         predictor=gsub(":days","",predictor_full)) 
+
+ggplot(lme_coefficients %>%
+         mutate(compound=factor(gsub("compound|:day","",predictor), levels=2:15)), 
+       aes(x=compound, y=Value, color=p_adjusted<0.05))+
+  geom_hline(yintercept=0, linetype="dashed")+
+  geom_errorbar(aes(ymin=Value - `Std.Error`, ymax=Value +`Std.Error`), width=0.2)+geom_point(size=3)+theme_bw()+
+  scale_color_manual(values=c("#85ADAC","#555B6E"))
+
+# also nice #BEE3DB
+  
+```
+
+Now intersect the two model outputs to compare and interpret the results (so far only compared the results of the first and last model).
+ 
+```{r, compare}
+
+both_predictions<-inner_join(glmer_coefficients, lme_coefficients, by="predictor", suffix=c(".glmer",".lme")) %>%
+  mutate(significant_in_either=ifelse(significant_higher | significant_lower, T, F))
+
+
+ggplot(both_predictions, aes(x=Estimate, y=Value, color=significant_higher, shape=significant_lower, alpha=significant_in_either))+
+  geom_vline(xintercept = 0, linetype="dashed")+
+  geom_hline(yintercept = 0, linetype="dashed")+
+  geom_point(size=5)+
+  geom_errorbarh(aes(xmin=Estimate-`Std. Error`, xmax=Estimate+`Std. Error`))+
+  geom_errorbar(aes(ymin=Value-`Std.Error`, ymax=Value+`Std.Error`))+
+  xlab("Coefficient (fitted days of vase life)")+
+  ylab("Coefficient (fitted slope of flower width over time)")+
+  theme_bw()+
+  scale_alpha_discrete(range=c(0.5,1))
+
+
+```
+
+
+### To dos:
+
+-recheck nesting formulation
+-model 2: a bit weird still?? Convergence,  Can we get a hint from professors
+-write an email: is width increase a good thing? 
+
