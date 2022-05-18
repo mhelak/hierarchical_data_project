@@ -17,6 +17,7 @@ library(tidyverse)
 library(ggplot2)
 library(nlme)
 library(lme4)
+library(bild)
 ```
 
 ## Count data of rose vase life days. 
@@ -78,7 +79,7 @@ ggplot(glmer_coefficients %>%
        aes(x=compound, y=Estimate, color=p_adjusted<0.05))+
   geom_hline(yintercept=0, linetype="dashed")+
   geom_errorbar(aes(ymin=Estimate - `Std. Error`, ymax=Estimate +`Std. Error`), width=0.2)+geom_point(size=3)+theme_bw()+
-  scale_color_manual(values=c("#85ADAC","#555B6E"))
+  scale_color_manual(values=c("grey","#85ADAC"))+coord_flip()
          
 ```
 
@@ -95,6 +96,8 @@ outmat<-matrix(nrow = nrow(d), ncol=max(d$tot.vase.days))
 outmat[is.na(outmat)]<-1
 for (i in 1:nrow(outmat)){
   outmat[i,c(d[i,tot.vase.days]:25)]<-0
+  outmat[i,d[i,tot.vase.days]]<-1
+
 }
 
 outdf<-as.data.frame(outmat)
@@ -127,17 +130,28 @@ ggplot(data = data_full_cc)+
 
 ```{r bn}
 
-#d_full$fresh<-factor(d_full$fresh, levels=c(1,0))
-#d_full$fresh<-relevel(d_full$fresh, ref=1)
-glmer_out_bn <- glmer(fresh ~ compound + day + compound*day + species + garden + (1|rater) + (1|subplotID/bushID), family=binomial, data=d_full)
+#xtabs(~ garden + subplotID, d_full)
+#compound + day + 
 
+#glmer_out_bn <- glmer(fresh ~ compound+day + species + (1|rater) + (1|garden/subplotID), family=binomial, data=d_full)
+
+glmer_out_bn <- glmer(fresh ~ compound + species + garden + (1|day) + (1|rater) + (1|subplotID/bushID), family=binomial, data=d_full)
 summary(glmer_out_bn)
+
+
+#this does not work
+#glmer_out_bn_flowerID <- glmer(fresh ~ compound + species + garden + (1|flowerID|day) + (1|rater) + (1|subplotID/bushID), family=binomial, data=d_full)
+#summary(glmer_out_bn)
+
+
+#glmer_out_bn_bild <- glmer(fresh ~ compound+day + species + (1|rater) + (1|garden/subplotID), family=binomial, data=d_full)
+
 
 
 glmer_bn_coefficients<-as.data.frame(summary(glmer_out_bn)$coeff) %>%
   rownames_to_column("predictor") %>%
   filter(grepl("compound",predictor)) %>%
-  filter(grepl("day",predictor)) %>%
+  #filter(grepl("day",predictor)) %>%
   dplyr::rename(pval=`Pr(>|z|)`) %>%
   #we want to have p-adjusted (Holm) values for one-sided test
   #however in this case it's the moe the day decreases, the more the probability of 1 should increase--> we're looking for highest neg associations:
@@ -147,11 +161,11 @@ glmer_bn_coefficients<-as.data.frame(summary(glmer_out_bn)$coeff) %>%
          significant_lower=ifelse(p_adjusted<0.05, T, F))
 
 ggplot(glmer_bn_coefficients %>%
-         mutate(compound=factor(gsub("compound|:day","",predictor), levels=2:15)), 
+         mutate(compound=factor(gsub("compound","",predictor), levels=2:15)), 
        aes(x=compound, y=Estimate, color=p_adjusted<0.05))+
   geom_hline(yintercept=0, linetype="dashed")+
   geom_errorbar(aes(ymin=Estimate - `Std. Error`, ymax=Estimate +`Std. Error`), width=0.2)+geom_point(size=3)+theme_bw()+
-  scale_color_manual(values=c("#85ADAC","#555B6E"))
+  scale_color_manual(values=c("grey","#85ADAC"))+coord_flip()
 
 
 ```
@@ -168,7 +182,7 @@ Below I transform the data so that there is a row for each measurement of each f
 ```{r, message=FALSE, fig.width=8, fig.height=5}
 
 g <- fread('gaussian_data_G6.csv') 
-summary(g) #there is only one rater, drop it
+#summary(g) #there is only one rater, drop it
 g<-g %>% dplyr::select(-Rater)
 
 
@@ -254,7 +268,7 @@ I fit a linear model to the gaussian outcome data where Compound, Type, Garden a
 ```{r}
 
 #g1 <- glm(Width ~ Compound + Type + Garden + Days + Compound*Days + (1 | Subplot), data=dataG_long)
-lme_out <- nlme::lme(width ~ compound + type + garden + days + compound*days, data=dataG_long, random = ~1|subplot/garden, na.action=na.omit)
+lme_out <- nlme::lme(width ~ compound + type + garden + days + compound*days, data=dataG_long, random = ~1|subplot, na.action=na.omit)
 ```
 
 Probably not right, this output is too long.
@@ -268,19 +282,19 @@ lme_coefficients<-as.data.frame(summary(lme_out)$tTable) %>%
   rownames_to_column("predictor_full") %>%
   filter(grepl("compound",predictor_full)) %>%
   filter(grepl("days",predictor_full)) %>%
-  dplyr::rename(pval=`p-value`) %>%
+  #dplyr::rename(pval=`p-value`) %>%
   #we want to have p-adjusted (Holm) values for one-sided test H.alt: lambda(compound)>lambda(water)
-  dplyr::mutate(one_sided_pval=ifelse(`t-value`<0, pval/2, (1-pval/2)),
-         p_adjusted=p.adjust(one_sided_pval, method="holm"),
-         significant_lower=ifelse(p_adjusted<0.05, T, F),
-         predictor=gsub(":days","",predictor_full)) 
+  #dplyr::mutate(one_sided_pval=ifelse(`t-value`<0, pval/2, (1-pval/2)),
+    dplyr::mutate(p_adjusted=p.adjust(`p-value`, method="holm"),
+                  significant=ifelse(p_adjusted<0.05, T, F),
+                  predictor=gsub(":days","",predictor_full)) 
 
 ggplot(lme_coefficients %>%
          mutate(compound=factor(gsub("compound|:day","",predictor), levels=2:15)), 
        aes(x=compound, y=Value, color=p_adjusted<0.05))+
   geom_hline(yintercept=0, linetype="dashed")+
   geom_errorbar(aes(ymin=Value - `Std.Error`, ymax=Value +`Std.Error`), width=0.2)+geom_point(size=3)+theme_bw()+
-  scale_color_manual(values=c("#85ADAC","#555B6E"))
+  scale_color_manual(values=c("grey","#85ADAC"))+coord_flip()
 
 # also nice #BEE3DB
   
@@ -291,10 +305,10 @@ Now intersect the two model outputs to compare and interpret the results (so far
 ```{r, compare}
 
 both_predictions<-inner_join(glmer_coefficients, lme_coefficients, by="predictor", suffix=c(".glmer",".lme")) %>%
-  mutate(significant_in_either=ifelse(significant_higher | significant_lower, T, F))
+  mutate(significant_in_either=ifelse(significant_higher | significant, T, F))
 
 
-ggplot(both_predictions, aes(x=Estimate, y=Value, color=significant_higher, shape=significant_lower, alpha=significant_in_either))+
+ggplot(both_predictions, aes(x=Estimate, y=Value, color=significant_higher, shape=significant, alpha=significant_in_either))+
   geom_vline(xintercept = 0, linetype="dashed")+
   geom_hline(yintercept = 0, linetype="dashed")+
   geom_point(size=5)+
@@ -303,15 +317,16 @@ ggplot(both_predictions, aes(x=Estimate, y=Value, color=significant_higher, shap
   xlab("Coefficient (fitted days of vase life)")+
   ylab("Coefficient (fitted slope of flower width over time)")+
   theme_bw()+
-  scale_alpha_discrete(range=c(0.5,1))
+  scale_alpha_discrete(range=c(0.5,1))+
+  geom_text(data=subset(both_predictions, significant_higher == T & significant == T),
+            aes(Estimate,Value,label=predictor), nudge_x = -0.13)
 
 
 ```
 
+## Approximate conclusions
 
-### To dos:
-
--recheck nesting formulation
--model 2: a bit weird still?? Convergence,  Can we get a hint from professors
--write an email: is width increase a good thing? 
+-Count data suggest compounds 6 and 14 as candidates
+-Longitudinal binary data suggests the same ones, but in addition 3 more, possibly due to higher power that longitudinal modelling provides
+-Longitudinal Gaussian data describing width suggests that most compounds besides 2 affect the flower width over time. If the width increase is indeed a good sign, by combining the count data results and these, the compounds 6 and 14 might indeed be good candidates for extending rose vase life relative to water.
 
