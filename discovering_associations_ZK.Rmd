@@ -44,7 +44,9 @@ Checking the distribution of the Vase Days of the count data. It looks like ther
 
 ```{r, fig.width=6, fig.height=4 }
 
-ggplot(d, aes(x=tot.vase.days, fill=compound))+geom_histogram(alpha=0.7)+facet_wrap(~compound, ncol=5)+theme(legend.position = "none")
+ggplot(d, aes(x=tot.vase.days, fill=compound))+geom_histogram(alpha=0.7, bins=25)+facet_wrap(~compound, ncol=5)+theme(legend.position = "none")
+
+ggplot(d, aes(x=tot.vase.days, fill=compound))+geom_density(alpha=0.5)+theme(legend.position = "none")
 #ggplot(d %>% filter(compound %in% c(1, 6, 14)), aes(x=tot.vase.days, fill=as.factor(compound)))+geom_density(alpha=0.3)
 
 # d %>% group_by(compound) %>% 
@@ -53,17 +55,35 @@ ggplot(d, aes(x=tot.vase.days, fill=compound))+geom_histogram(alpha=0.7)+facet_w
 #   ggplot(aes(x=mean, y=var))+
 #   geom_abline(slope=1, intercept=0)+
 #   geom_point()
+ggplot(d, aes(x=compound,y=tot.vase.days, fill=compound))+geom_boxplot()+theme(legend.position = "none")
 
 
-gf <- goodfit(d$tot.vase.days[d$compound==6], "poisson")
+gf <- goodfit(d$tot.vase.days[d$compound==1], "poisson")
+summary(gf)
 plot(gf, type="standing", scale="raw") #I guess the fit would be better if we did it per compound
 ```
 
 ```{r, glmer}
 
-#inspired by the first answer here for nested data formulation https://stats.stackexchange.com/questions/228800/crossed-vs-nested-random-effects-how-do-they-differ-and-how-are-they-specified
+#https://bbolker.github.io/mixedmodels-misc/glmmFAQ.html#overdispersion
+overdisp_fun <- function(model) {
+rdf <- df.residual(model)
+rp <- residuals(model,type="pearson")
+Pearson.chisq <- sum(rp^2)
+prat <- Pearson.chisq/rdf #pearson residuals over the residual degrees of freedom
+pval <- pchisq(Pearson.chisq, df=rdf, lower.tail=FALSE)
+c(chisq=Pearson.chisq,ratio=prat,rdf=rdf,p=pval)
+}
 
-glmer_out <- glmer(tot.vase.days ~ compound + species + garden + (1|subplotID/bushID), family=poisson(link = "log"), data=d)
+
+#inspired by the first answer here for nested data formulation https://stats.stackexchange.com/questions/228800/crossed-vs-nested-random-effects-how-do-they-differ-and-how-are-they-specified
+glmer_out <- glmer(tot.vase.days ~ compound + species + garden + (1|rater) + (1|subplotID/bushID), family=poisson(link = "log"), data=d)
+overdisp_fun(glmer_out) #quite oki! no significance, yey. i think this might be more relevant than goodness of fit, because here we have all our predictors there that account for the variation
+
+#https://fukamilab.github.io/BIO202/04-B-binary-data.html#glm_for_count_data
+drop1(glmer_out, test = "Chi")
+
+
 
 glmer_coefficients<-as.data.frame(summary(glmer_out)$coeff) %>%
   rownames_to_column("predictor") %>%
@@ -79,7 +99,8 @@ ggplot(glmer_coefficients %>%
        aes(x=compound, y=Estimate, color=p_adjusted<0.05))+
   geom_hline(yintercept=0, linetype="dashed")+
   geom_errorbar(aes(ymin=Estimate - `Std. Error`, ymax=Estimate +`Std. Error`), width=0.2)+geom_point(size=3)+theme_bw()+
-  scale_color_manual(values=c("grey","#85ADAC"))+coord_flip()
+  scale_color_manual(values=c("grey","#85ADAC"))+coord_flip()+
+  ylab(expression(beta["compound"]))
          
 ```
 
@@ -108,14 +129,13 @@ d_full<-d %>%
   pivot_longer(contains("newVar"), names_to="day", values_to = "fresh") %>%
   mutate(day=as.numeric(gsub("newVar_V","",day)))
 
-
 data_full_cc <- aggregate(fresh ~ compound + day, data = d_full, FUN = mean) %>%
   mutate(water=ifelse(compound==1,T,F))
 
 ggplot(data = data_full_cc)+
   geom_hline(yintercept=0.5, linetype="dashed")+
     geom_line(aes(x = day, y = fresh, color = compound, size=water, alpha=water)) +
-  scale_size_discrete(range=c(0.8,1.5),guide="none")+
+  scale_size_discrete(range=c(0.7,1.5),guide="none")+
   scale_alpha_discrete(range=c(0.65,1), guide="none")+
   theme_bw()+
   ylab("Proportion of fresh flowers")+
@@ -131,21 +151,26 @@ ggplot(data = data_full_cc)+
 ```{r bn}
 
 #xtabs(~ garden + subplotID, d_full)
-#compound + day + 
 
-#glmer_out_bn <- glmer(fresh ~ compound+day + species + (1|rater) + (1|garden/subplotID), family=binomial, data=d_full)
-
+# we add the day as a random effect, because the likelihood to "switch" from
 glmer_out_bn <- glmer(fresh ~ compound + species + garden + (1|day) + (1|rater) + (1|subplotID/bushID), family=binomial, data=d_full)
 summary(glmer_out_bn)
 
+#drop1(glmer_out_bn) this does not converge when dropping species
 
-#this does not work
-#glmer_out_bn_flowerID <- glmer(fresh ~ compound + species + garden + (1|flowerID|day) + (1|rater) + (1|subplotID/bushID), family=binomial, data=d_full)
-#summary(glmer_out_bn)
+
+#this model also works, so i guess just putting lowerID AND the day into the same model is an overkill, maybe cuz we eventually might just have n=1 for each combination of predictors
+glmer_out_bn2 <- glmer(fresh ~ compound + species + garden + (1|flowerID) + (1|rater) + (1|subplotID/bushID), family=binomial, data=d_full)
+summary(glmer_out_bn2)
+
+
+
+#this does not converge
+#glmer_out_bn_flowerID <- glmer(fresh ~ compound + species + garden + (1|flowerID) + (1|day) + (1|rater) + (1|subplotID/bushID), family=binomial, data=d_full)
+#summary(glmer_out_bn_flowerID)
 
 
 #glmer_out_bn_bild <- glmer(fresh ~ compound+day + species + (1|rater) + (1|garden/subplotID), family=binomial, data=d_full)
-
 
 
 glmer_bn_coefficients<-as.data.frame(summary(glmer_out_bn)$coeff) %>%
@@ -158,18 +183,37 @@ glmer_bn_coefficients<-as.data.frame(summary(glmer_out_bn)$coeff) %>%
   #H.alt: lambda(compound)<lambda(water)
   dplyr::mutate(one_sided_pval=ifelse(`z value`>0, pval/2, (1-pval/2)),
          p_adjusted=p.adjust(one_sided_pval, method="holm"),
-         significant_lower=ifelse(p_adjusted<0.05, T, F))
+         significant_higher=ifelse(p_adjusted<0.05, T, F))
 
 ggplot(glmer_bn_coefficients %>%
          mutate(compound=factor(gsub("compound","",predictor), levels=2:15)), 
        aes(x=compound, y=Estimate, color=p_adjusted<0.05))+
   geom_hline(yintercept=0, linetype="dashed")+
   geom_errorbar(aes(ymin=Estimate - `Std. Error`, ymax=Estimate +`Std. Error`), width=0.2)+geom_point(size=3)+theme_bw()+
-  scale_color_manual(values=c("grey","#85ADAC"))+coord_flip()
+  scale_color_manual(values=c("grey","#85ADAC"))+coord_flip()+
+  ylab(expression(beta["compound"]))
 
 
 ```
 
+```{r compare_both}
+
+both_predictions1<-bind_rows(glmer_coefficients %>% mutate(model="count"), 
+                             glmer_bn_coefficients %>% mutate(model="binary"))
+
+
+#both_predictions1<-inner_join(glmer_coefficients, glmer_bn_coefficients, by="predictor", suffix=c(".count",".binary")) #%>%
+  #mutate(significant_in_either=ifelse(significant_higher | significant, T, F))
+
+ggplot(both_predictions1 %>%        
+         mutate(compound=factor(gsub("compound","",predictor), levels=2:15)), 
+       aes(x=compound, y=Estimate, color=p_adjusted<0.05, shape=model))+
+  geom_hline(yintercept=0, linetype="dashed")+
+  geom_errorbar(aes(ymin=Estimate - `Std. Error`, ymax=Estimate +`Std. Error`), width=0.2)+geom_point(size=3)+theme_bw()+
+  scale_color_manual(values=c("grey","#85ADAC"))+coord_flip()+
+  ylab(expression(beta["compound"]))
+         
+```
 
 ## Gaussian data of flower width.
 
@@ -224,9 +268,14 @@ hist(dataG_combo$width)
 
 ```
 
-```{r, include=F, eval=F}
+```{r}
 
-hist(dataG_combo$delta_width)
+#hist(dataG_combo$delta_width)
+
+ggplot(dataG_combo, aes(x=width, fill=compound))+geom_histogram(alpha=0.7, bins=25)+facet_wrap(~compound, ncol=5)+theme(legend.position = "none")
+
+ggplot(dataG_combo, aes(x=width, fill=compound))+geom_density(alpha=0.5)+theme(legend.position = "none")
+ggplot(dataG_combo, aes(x=compound,y=width, fill=compound))+geom_boxplot()+theme(legend.position = "none")
 
 ```
 
@@ -269,6 +318,7 @@ I fit a linear model to the gaussian outcome data where Compound, Type, Garden a
 
 #g1 <- glm(Width ~ Compound + Type + Garden + Days + Compound*Days + (1 | Subplot), data=dataG_long)
 lme_out <- nlme::lme(width ~ compound + type + garden + days + compound*days, data=dataG_long, random = ~1|subplot, na.action=na.omit)
+
 ```
 
 Probably not right, this output is too long.
@@ -294,7 +344,8 @@ ggplot(lme_coefficients %>%
        aes(x=compound, y=Value, color=p_adjusted<0.05))+
   geom_hline(yintercept=0, linetype="dashed")+
   geom_errorbar(aes(ymin=Value - `Std.Error`, ymax=Value +`Std.Error`), width=0.2)+geom_point(size=3)+theme_bw()+
-  scale_color_manual(values=c("grey","#85ADAC"))+coord_flip()
+  scale_color_manual(values=c("grey","#85ADAC"))+coord_flip()+
+  ylab(expression(beta["compound*time"]))
 
 # also nice #BEE3DB
   
@@ -304,22 +355,29 @@ Now intersect the two model outputs to compare and interpret the results (so far
  
 ```{r, compare}
 
-both_predictions<-inner_join(glmer_coefficients, lme_coefficients, by="predictor", suffix=c(".glmer",".lme")) %>%
-  mutate(significant_in_either=ifelse(significant_higher | significant, T, F))
+both_predictions<-inner_join(glmer_bn_coefficients, lme_coefficients, by="predictor", suffix=c(".glmer",".lme")) %>%
+  mutate(significance=case_when(p_adjusted.glmer<0.05 & p_adjusted.lme <0.05 ~ "p-adj (both models)<0.05",
+                                p_adjusted.glmer<0.05 ~ "p-adj (vase life)<0.05",
+                                p_adjusted.lme<0.05 ~ "p-adj (flower width)<0.05",
+                                T ~ "non-significant"))
+  #mutate(significant_in_either=ifelse(significant_higher | significant, T, F))
 
 
-ggplot(both_predictions, aes(x=Estimate, y=Value, color=significant_higher, shape=significant, alpha=significant_in_either))+
-  geom_vline(xintercept = 0, linetype="dashed")+
-  geom_hline(yintercept = 0, linetype="dashed")+
-  geom_point(size=5)+
+ggplot(both_predictions, aes(x=Estimate, y=Value, color=significance))+
+  geom_vline(xintercept = 0, linetype="dashed", size=0.3)+
+  geom_hline(yintercept = 0, linetype="dashed", size=0.3)+
+  geom_point(size=3)+
   geom_errorbarh(aes(xmin=Estimate-`Std. Error`, xmax=Estimate+`Std. Error`))+
   geom_errorbar(aes(ymin=Value-`Std.Error`, ymax=Value+`Std.Error`))+
   xlab("Coefficient (fitted days of vase life)")+
   ylab("Coefficient (fitted slope of flower width over time)")+
   theme_bw()+
-  scale_alpha_discrete(range=c(0.5,1))+
-  geom_text(data=subset(both_predictions, significant_higher == T & significant == T),
-            aes(Estimate,Value,label=predictor), nudge_x = -0.13)
+  #scale_alpha_discrete(range=c(0.5,1))+
+  geom_text(data=subset(both_predictions, significance == "p-adj (both models)<0.05"),
+            aes(Estimate,Value,label=gsub("compound","",predictor)), nudge_x = -0.15, nudge_y=0.02)+
+  scale_color_manual(values=c("#f2e9e4","#4a4e69","#9a8c98", "#c9ada7"))+
+  ylab(expression(beta["compound*time on width"]))+
+  xlab(expression(beta["compound on vase life"]))
 
 
 ```
