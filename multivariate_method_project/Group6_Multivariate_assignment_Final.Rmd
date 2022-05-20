@@ -1,0 +1,214 @@
+---
+title: "Multivariate Methods Assignment: Canadian Weather"
+author: 'Group 6: Mona Bazmawe, Monika Helak, Sebastian Tanco, Zane Kliesmete'
+date: "May 23rd, 2022"
+output:
+  pdf_document: default
+  word_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(GrassmannOptim)
+library(dplyr)
+library(Matrix)
+library(ldr)
+```
+
+# 1. Introduction
+
+Climate can be difficult to forecast. One of the possible approaches to studying climate includes looking at weather data and finding similarities in weather patterns across different cities. We can accelerate policy decisions relating to climate change by implementing similar solutions in cities with similar weather patterns. In the following analysis we utilize a two-dimensional representation to help us identify cities with similar weather patterns and visually quantify and contrast their differences. The data set used consists of 35 cities in Canada with one year (365 days) of precipitation data. 
+
+```{r, include = FALSE}
+load("CanadianWeather.rda")
+da<-CanadianWeather[[1]]
+da<-da[,,"Precipitation.mm"] # precipitation data
+head(da)
+days<-1:365
+days.range<-diff(range(days))
+days<-(days-min(days))/days.range # rescaling to [0,1]
+city.names <- colnames(da)
+n.cities<-ncol(da)
+MetaData<-data.frame(city=colnames(da), region=CanadianWeather$region,
+                     province=CanadianWeather$province)
+colnames(da)
+```
+
+# 2. Functional Data Analysis
+
+In order to perform a polynomial fitting we first needed to determine the optimal degree d for the polynomial function. The below plot shows the sum of squared residuals vs. the model degree \textit{m}. We can tell that with a higher degree polynomial a better fit is achieved. 
+
+```{r,fig.height = 2.8, fig.width = 6.6, echo = FALSE}
+# Choosing an optimal m
+max.d <- 20
+mean.adj.Rsquared <- rep(0,max.d)
+mean.sum.square.resid <- rep(0,max.d)
+for (d in 1:max.d){
+  cities.adj.Rsquared <- rep(0,length(city.names))
+  sum.square.resid <- rep(0,length(city.names))
+  phi<-poly(days,degree=d)
+  for (city in 1:length(city.names)){
+    m <- lm(da[,city.names[city]]~phi)
+    cities.adj.Rsquared[city] <- summary(m)$adj.r.squared
+    sum.square.resid[city] <- deviance(m)
+  }
+  mean.adj.Rsquared[d] <- mean(cities.adj.Rsquared)
+  mean.sum.square.resid[d] <- mean(sum.square.resid)
+}
+par(mfrow=c(1,2))
+#plot(1:max.d,mean.adj.Rsquared,xlab = "model degree")
+plot(1:max.d,mean.sum.square.resid,xlab = "model degree")
+par(mfrow=c(1,1))
+```
+From the above plot we chose two values as the degrees of the polynomial and compared the fit of the model to the data. Looking at \textit{m=3} and \textit{m=10}, we can clearly see that the \textit{m=10} polynomial fits closer to the data than \textit{m=3} when setting the location equal to Vancouver. 
+
+
+```{r, fig.height = 2.8, fig.width = 6.6, echo = FALSE}
+phi<-poly(days,degree=3)
+par(mfrow=c(1,2))
+# estimation of the theta parameters for Vancouver
+m.Vancouver<- lm(da[,'Vancouver']~phi)
+# plot of fitted function
+plot(1:365,da[,'Vancouver'],main="Vancouver (m=3)", xlab="day", ylab="precipitation (mm/day)")
+lines(1:365,m.Vancouver$fitted.values,type="l", col=2)
+#par(mfrow = c(1,3))
+
+phi<-poly(days,degree=10)
+#par(mfrow=c(1,2))
+# estimation of the theta parameters for Vancouver
+m.Vancouver<- lm(da[,'Vancouver']~phi)
+# plot of fitted function
+plot(1:365,da[,'Vancouver'],main="Vancouver (m=10)", xlab="day", ylab="precipitation (mm/day)")
+lines(1:365,m.Vancouver$fitted.values,type="l", col=2)
+#par(mfrow = c(1,3))
+
+```
+After looking at a few more locations namely Edmonton, Prince Rupert and Victoria, we concluded that \textit{m=10} appears to be a good choice of degree for the polynomial fitting to the data.
+
+```{r, fig.height = 2.8, fig.width = 6.6, echo = FALSE}
+phi <- poly(days, degree = 10)
+par(mfrow=c(1,3))
+m.Edmonton<- lm(da[,"Edmonton"]~phi)
+plot(1:365,da[,"Edmonton"],main="Edmonton", xlab="day", ylab="precipitation (mm/day)")
+lines(1:365,m.Edmonton$fitted.values,type="l", col=2)
+
+m.PrRupert<- lm(da[,"Pr. Rupert"]~phi)
+plot(1:365,da[,"Pr. Rupert"],main="Pr. Rupert", xlab="day", ylab="precipitation (mm/day)")
+lines(1:365,m.PrRupert$fitted.values,type="l", col=2)
+
+m.Victoria<- lm(da[,"Victoria"]~phi)
+plot(1:365,da[,"Victoria"],main="Victoria", xlab="day", ylab="precipitation (mm/day)")
+lines(1:365,m.Victoria$fitted.values,type="l", col=2)
+
+```
+
+
+```{r, fig.height = 2.8, fig.width = 6.6, include = FALSE}
+d<-10
+parameters <- data.frame(matrix(0,length(city.names),d+1))
+for (city in 1:length(city.names)){
+  m <- lm(da[,city.names[city]]~phi)
+  parameters[city,] <- m$coefficients
+}
+colnames(parameters)<- attr(m$coefficients, "names")
+rownames(parameters)<-city.names
+dim(parameters)
+```
+
+# 3. Multidimensional Scaling
+
+Next, MSD is performed. First, we apply the column centering on the parameters matrix and then we obtain the SVD of this matrix. The plot below shows that in the first few dimensions we capture most of the information in the theta matrix.
+
+```{r, fig.height = 2.8, fig.width = 4.6, echo=FALSE}
+# column centering of the matrix and applying SVD
+parameters.mean<-colMeans(parameters)
+parameters<-scale(parameters,center = TRUE, scale = FALSE)
+parameters.svd<-svd(parameters)
+
+
+plot(parameters.svd$d^2/(sum(parameters.svd$d^2)),type="l",
+     ylab="squared singular value")
+```
+
+
+
+# 4. Functional Biplot 
+
+Here we construct the scores matrix Z\textsubscript{k} with \textit{k=2} and then plot these scores. Each city has a score in each dimension which is captured in the 2x2 scatter plot. From this plot we can visualize which cities share similar precipitation characteristics in the first two dimensions which capture the most variability in the data.
+
+```{r, echo = FALSE}
+k <-2
+Uk <-parameters.svd$u[ ,1:k]
+Dk <- diag(parameters.svd$d [1:k])
+Zk <-Uk%*%Dk
+rownames(Zk)<- rownames(parameters)
+
+plot (Zk , xlab =" Z1", ylab =" Z2",xlim=c(-50,20))
+ind.label<-which(abs(Zk[,1])>10)
+text(Zk[ind.label,1],Zk[ind.label,2],rownames(Zk)[ind.label],cex =0.7,)
+abline(v=0,lty=2,col=4)
+abline(h=0,lty=2,col=4)
+```
+
+It can be seen that the origin ((0, 0)) corresponds to the average precipitation/day function. The plot also shows that there are several cities with positive scores in the first dimension (e.g. Edmonton, Winnipeg and Scheffervll). The city of Prince Rupert stands out having a large positive score in the second dimension but a large negative score in the first dimension.
+
+To better understand what large Z\textsubscript{1} or Z\textsubscript{2} scores mean, we will back-transform the SVD to the original function space.
+
+```{r, fig.height = 2.8, fig.width = 6.6,   include = FALSE}
+# right singular vectors (loadings)
+V<-parameters.svd$v[,1:2]
+# a vector with many points in the [0,1] interval, that will be used for plotting
+days.plot<-seq(0,1,length.out = 100)
+# evaluate the polynomial basis functions at all these points
+phi.plot<-poly(days.plot,degree=10)
+# construct the design matrix for the linear model
+X<-cbind(1,phi.plot)
+# product of this X matrix with the V matrix
+XV<-X %*% V
+# X times the vector with the column means of the
+# original parameters matrix gives an estimate of the
+# average precipitation/day function.
+mean.curve<-X%*%parameters.mean
+plot(days.plot,exp(mean.curve)-1, type="l")
+plot(days.plot,mean.curve, type="l")
+
+#From the score plot we see that the scores in the first dimension vary between $-40$ and $+20$. Now we illustrated how #changing the z-score in the first dimension will show the effect of this score and how it varies from the average curve.
+```
+
+```{r, echo = FALSE}
+
+rng<-exp(range(mean.curve-XV[,1]*10,mean.curve+XV[,1]*20))-1
+plot(days.plot*days.range,exp(mean.curve)-1,type="l",ylim=rng,
+     xlab="days of year", ylab="Precipitation.mm",  main = "First Dimension")
+lines(days.plot*days.range,exp(mean.curve+XV[,1]*10)-1,col=4) # blue: large positive score
+lines(days.plot*days.range,exp(mean.curve-XV[,1]*10)-1,col=2) # red: large negative score
+legend("topleft", legend = c("Positive", "Negative"), col = c(4,2), lwd = 1)
+```
+
+
+
+We can conclude that cities that have a large negative score in the first dimension tend to have high precipitation at the end and beginning of the year, in other words, during the winter months. On the other hand, cities with a large positive score have their high precipitation in the middle of the year during the Canadian summer.
+\newline
+\newline
+Referring back to the functional biplot, we can interpret that particularly Prince Rupert, Vancouver and Sydney have high precipitation during the winter, while the cities Edmonton, Winnipeg, Prince Albert and Regina have high precipitation in the summer. 
+\newline
+\newline
+We can repeat the procedure for the second dimension.
+
+```{r, echo = FALSE}
+
+rng<-exp(range(mean.curve-XV[,2]*10,mean.curve+XV[,2]*10))-1
+plot(days.plot*days.range,exp(mean.curve)-1,type="l",ylim=rng,
+     xlab="days of year", ylab="Precipitation.mm", main = "Second Dimension")
+lines(days.plot*days.range,exp(mean.curve+XV[,2]*10)-1,col=4) # blue : large positive score
+lines(days.plot*days.range,exp(mean.curve-XV[,2]*10)-1,col=2) # red : large negative score 
+legend("topleft", legend = c("Positive", "Negative"), col = c(4,2), lwd = 1)
+```
+
+The graph allows us to conclude that cities with large positive scores in the second dimension have high amounts of precipitation in the second half of the year, particularly around autumn time. Cities with large negative scores get slightly less precipitation than average and do not experience high precipitation in the autumn. From the score plot we can see that Prince Rupert has the largest positive score in the second dimension. This isn't surprising as Prince Rupert also had a high score in the first dimension, which corresponded to a very high winter precipitation. High scores in both the first and second dimension point towards the fact that precipitation in Prince Rupert is unusually high at various points during the year as compared to other cities in Canada.   
+
+
+
+
