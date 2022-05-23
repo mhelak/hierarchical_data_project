@@ -57,6 +57,11 @@ ggplot(d, aes(x=tot.vase.days, fill=compound))+geom_density(alpha=0.5)+theme(leg
 #   geom_point()
 ggplot(d, aes(x=compound,y=tot.vase.days, fill=compound))+geom_boxplot()+theme(legend.position = "none")
 
+for (comp in 1:14){
+  for (sp in 1:2){
+  summary(goodfit(d$tot.vase.days[d$compound==comp & d$species==sp], "poisson"))
+} #all but 1 significant
+}
 
 gf <- goodfit(d$tot.vase.days[d$compound==1], "poisson")
 summary(gf)
@@ -83,6 +88,18 @@ overdisp_fun(glmer_out) #quite oki! no significance, yey. i think this might be 
 #https://fukamilab.github.io/BIO202/04-B-binary-data.html#glm_for_count_data
 drop1(glmer_out, test = "Chi")
 
+exp(fixef(glmer_out))
+
+#diagnostics https://www.ssc.wisc.edu/sscc/pubs/MM/MM_DiagInfer.html
+exp(summary(glmer_out)$coeff)
+plot(glmer_out)
+
+#compound 
+ctrl<-exp(summary(glmer_out)$coeff)[1,1]
+comp6<-exp(summary(glmer_out)$coeff)[6,1]
+comp14<-exp(summary(glmer_out)$coeff)[14,1]
+ctrl*comp6-ctrl
+ctrl*comp14-ctrl
 
 
 glmer_coefficients<-as.data.frame(summary(glmer_out)$coeff) %>%
@@ -156,13 +173,20 @@ ggplot(data = data_full_cc)+
 glmer_out_bn <- glmer(fresh ~ compound + species + garden + (1|day) + (1|rater) + (1|subplotID/bushID), family=binomial, data=d_full)
 summary(glmer_out_bn)
 
+plot(glmer_out_bn)
+
+
 #drop1(glmer_out_bn) this does not converge when dropping species
+
+#only interaction, no main effects
+glmer_out_bn_inter <- glmer(fresh ~ compound*day + species + (1|rater) + (1|subplotID/bushID)+ (1|day), family=binomial, data=d_full)
+summary(glmer_out_bn_inter)
 
 
 #this model also works, so i guess just putting lowerID AND the day into the same model is an overkill, maybe cuz we eventually might just have n=1 for each combination of predictors
-glmer_out_bn2 <- glmer(fresh ~ compound + species + garden + (1|flowerID) + (1|rater) + (1|subplotID/bushID), family=binomial, data=d_full)
-summary(glmer_out_bn2)
-
+#glmer_out_bn2 <- glmer(fresh ~ compound + species + garden + (1|flowerID) + (1|rater) + (1|subplotID/bushID), family=binomial, data=d_full)
+#summary(glmer_out_bn2)
+#NONO, doesnt work
 
 
 #this does not converge
@@ -171,6 +195,19 @@ summary(glmer_out_bn2)
 
 
 #glmer_out_bn_bild <- glmer(fresh ~ compound+day + species + (1|rater) + (1|garden/subplotID), family=binomial, data=d_full)
+
+#test gee library 
+library(gee)
+
+gee_inter <- gee(fresh ~ compound*day + species + garden, # + (1|rater) + (1|subplotID/bushID)
+                 id=flowerID, family=binomial, data=d_full)
+summary(gee_inter)
+
+```
+
+
+
+```{r}
 
 
 glmer_bn_coefficients<-as.data.frame(summary(glmer_out_bn)$coeff) %>%
@@ -324,6 +361,7 @@ lme_out <- nlme::lme(width ~ compound + type + garden + days + compound*days, da
 Probably not right, this output is too long.
 ```{r, include=F}
 summary(lme_out)
+plot(lme_out)
 
 ```
 ```{r, lme}
