@@ -1,0 +1,342 @@
+---
+title: "Discovering Associations - Model 1"
+output: pdf_document
+author: ""
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r, include = FALSE}
+#load packages
+library(vcd)
+library(data.table)
+library(tidyverse)
+library(ggplot2)
+library(nlme)
+library(lme4)
+#library(bild)
+library(xtable)
+```
+
+## Count data of rose vase life days. 
+
+### Poisson-mixed effects modelling. 
+
+Out of 1440 datapoints, we have 60 missing outcomes (total vase days), which is 4.1% of the data.
+More data description, can copy some from simulation description.
+
+```{r, include = FALSE}
+#read in data
+d <- fread('count_data_G6.csv') %>%
+    mutate(garden=as.factor(garden),
+         species=as.factor(species),
+         rater=as.factor(rater),
+         compound=as.factor(compound),
+         subplotID=as.factor(subplotID),
+         bushID=as.factor(bushID)) %>%
+  na.omit()
+```
+
+Checking the distribution of the Vase Days of the count data. It looks like there is a larger degree of overdispersion than the poisson model currently accounts for (nope, it's just conditional on the compound: the goodfit should be done per compound).
+
+
+```{r, fig.width=6, fig.height=4 }
+p1<-ggplot(d, aes(x=tot.vase.days, fill=compound))+geom_histogram(alpha=0.7, bins=25)+facet_wrap(~compound, ncol=5)+theme(legend.position = "none")+theme_bw()+theme(legend.position = "none", axis.title = element_text(size=11))+xlab("Total vase days")
+
+p2<-ggplot(d, aes(x=compound,y=tot.vase.days, fill=compound))+geom_boxplot()+theme_bw()+
+  theme(legend.position = "none")+ylab("Total vase days")+xlab("Compound")
+
+cowplot::plot_grid(p1,p2, rel_widths = c(0.4,0.33), labels = c("A","B"), scale = 0.97)
+ggsave("figures/mod1_overview.pdf", height=4, width=10)
+
+#gf <- goodfit(d$tot.vase.days[d$compound==1], "poisson")
+#summary(gf)
+#plot(gf, type="standing", scale="raw") #I guess the fit would be better if we did it per compound
+```
+
+Initial Model (Model 0).
+
+```{r, glmer}
+#https://bbolker.github.io/mixedmodels-misc/glmmFAQ.html#overdispersion
+overdisp_fun <- function(model) {
+rdf <- df.residual(model)
+rp <- residuals(model,type="pearson")
+Pearson.chisq <- sum(rp^2)
+prat <- Pearson.chisq/rdf #pearson residuals over the residual degrees of freedom
+pval <- pchisq(Pearson.chisq, df=rdf, lower.tail=FALSE)
+c(chisq=Pearson.chisq,ratio=prat,rdf=rdf,p=pval)
+}
+#inspired by the first answer here for nested data formulation https://stats.stackexchange.com/questions/228800/crossed-vs-nested-random-effects-how-do-they-differ-and-how-are-they-specified
+glmer_out <- glmer(tot.vase.days ~ compound + species + garden + (1|rater) + (1|subplotID/bushID), family=poisson(link = "log"), data=d)
+summary(glmer_out)
+-2*logLik(glmer_out)
+AIC(glmer_out)
+BIC(glmer_out)
+overdisp_fun(glmer_out) #quite oki! no significance, yey. i think this might be more relevant than goodness of fit, because here we have all our predictors there that account for the variation
+#https://fukamilab.github.io/BIO202/04-B-binary-data.html#glm_for_count_data
+drop1(glmer_out, test = "Chi")
+glmer_coefficients<-as.data.frame(summary(glmer_out)$coeff) %>%
+  rownames_to_column("predictor") %>%
+  filter(grepl("compound",predictor)) %>%
+  dplyr::rename(pval=`Pr(>|z|)`) %>%
+  #we want to have p-adjusted (Holm) values for one-sided test H.alt: lambda(compound)>lambda(water)
+  dplyr::mutate(one_sided_pval=ifelse(`z value`>0, pval/2, (1-pval/2)),
+         p_adjusted=p.adjust(one_sided_pval, method="holm"),
+         significant_higher=ifelse(p_adjusted<0.05, T, F))
+ggplot(glmer_coefficients %>%
+         mutate(compound=factor(gsub("compound","",predictor), levels=2:15)), 
+       aes(x=compound, y=Estimate, color=p_adjusted<0.05))+
+  geom_hline(yintercept=0, linetype="dashed")+
+  geom_errorbar(aes(ymin=Estimate - `Std. Error`, ymax=Estimate +`Std. Error`), width=0.2)+geom_point(size=3)+theme_bw()+
+  scale_color_manual(values=c("grey","#85ADAC"))+coord_flip()+
+  ylab(expression(beta["compound"]))
+         
+```
+
+Conclusion: compounds 6 and 14 significantly increase rose vase days (mention estimates +- sd error, also backcalculated in days, alpha, one-sided Wald test, maybe the exact z and p-values, correction Holm).
+
+### Models comparison. 
+
+Model 1. Dropping Compounds.
+
+```{r}
+glmer_out1 <- glmer(tot.vase.days ~ species + garden + (1|rater) + (1|subplotID/bushID), family=poisson(link = "log"), data=d)
+# -2*logLik(glmer_out1)
+# AIC(glmer_out1)
+# BIC(glmer_out1)
+# LRT.1=2*(logLik(glmer_out)-logLik(glmer_out1))
+# c(LRT.1,1-pchisq(LRT.1,1))
+
+mod1<-as.data.frame(anova(glmer_out1,glmer_out, test="LRT")) %>%
+  mutate(Model=c("Model 1","Full model"),
+         dropped_predictor=c("Compound","-"))%>%
+  relocate(c(Model, dropped_predictor))
+
+```
+
+Model 2. Dropping species.
+
+```{r}
+glmer_out2 <- glmer(tot.vase.days ~ compound + garden + (1|rater) + (1|subplotID/bushID), family=poisson(link = "log"), data=d)
+
+mod2<-as.data.frame(anova(glmer_out2,glmer_out, test="LRT")) %>%
+  mutate(Model=c("Model 2","Full model"),
+         dropped_predictor=c("Species","-"))%>%
+  relocate(c(Model, dropped_predictor))
+
+```
+
+Model 3. Dropping garden.
+
+```{r}
+glmer_out3 <- glmer(tot.vase.days ~ compound + species + (1|rater) + (1|subplotID/bushID), family=poisson(link = "log"), data=d)
+
+mod3<-as.data.frame(anova(glmer_out3,glmer_out, test="LRT")) %>%
+  mutate(Model=c("Model 3","Full model"),
+         dropped_predictor=c("Garden","-"))%>%
+  relocate(c(Model, dropped_predictor))
+```
+
+Model 4.1 - Dropping bushID random effect.
+
+```{r}
+glmer_out4 <- glmer(tot.vase.days ~ compound + garden + species + (1|rater) + (1|subplotID), family=poisson(link = "log"), data=d)
+
+mod4<-as.data.frame(anova(glmer_out4,glmer_out, test="LRT")) %>%
+  mutate(Model=c("Model 4","Full model"),
+         dropped_predictor=c("BushID","-"))%>%
+  relocate(c(Model, dropped_predictor))
+
+```
+
+Model 4.2 - Dropping subplotID random effect
+
+```{r}
+glmer_out5 <- glmer(tot.vase.days ~ compound + garden + species + (1|rater) + (1|bushID), family=poisson(link = "log"), data=d)
+
+mod5<-as.data.frame(anova(glmer_out5,glmer_out, test="LRT")) %>%
+  mutate(Model=c("Model 5","Full model"),
+         dropped_predictor=c("subplotID","-"))%>%
+  relocate(c(Model, dropped_predictor))
+
+```
+
+Dropping rater as random effect.
+
+```{r}
+glmer_out6 <- glmer(tot.vase.days ~ compound + garden + species + (1|subplotID/bushID), family=poisson(link = "log"), data=d)
+
+mod6<-as.data.frame(anova(glmer_out6, glmer_out,test="LRT")) %>%
+  mutate(Model=c("Model 6","Full model"),
+         dropped_predictor=c("Rater","-"))%>%
+  relocate(c(Model, dropped_predictor))
+
+```
+
+
+Model 7 (dropping Species and Garden) is generated and compared to models 2 (dropping Species) and 3 (dropping Garden).
+
+```{r}
+glmer_out7 <- glmer(tot.vase.days ~ compound + (1|subplotID/bushID) + (1|rater), family=poisson(link = "log"), data=d)
+# -2*logLik(glmer_out6)
+# AIC(glmer_out6)
+# BIC(glmer_out6)
+# LRT.6.2=2*(logLik(glmer_out2)-logLik(glmer_out6))
+# c(LRT.6.2,1-pchisq(LRT.6.2,1))
+# LRT.6.3=2*(logLik(glmer_out3)-logLik(glmer_out6))
+# c(LRT.6.3,1-pchisq(LRT.6.3,1))
+
+
+mod7.1<-as.data.frame(anova(glmer_out7,glmer_out2, test="LRT")) %>%
+  mutate(Model=c("Model 7","Model 2"),
+         dropped_predictor=c("Species, Garden","Species")) %>%
+  relocate(c(Model, dropped_predictor))
+
+
+mod7.2<-as.data.frame(anova(glmer_out7,glmer_out3, test="LRT")) %>%
+  mutate(Model=c("Model 7","Model 3"),
+         dropped_predictor=c("Species, Garden","Garden")) %>%
+  relocate(c(Model, dropped_predictor))
+
+```
+
+
+Model 7 is compared with models lacking any of the random effects.
+Model 8 without subplotID
+
+```{r}
+glmer_out8 <- glmer(tot.vase.days ~ compound + (1|bushID) + (1|rater), family=poisson(link = "log"), data=d)
+# -2*logLik(glmer_out7)
+# AIC(glmer_out7)
+# BIC(glmer_out7)
+# LRT.7=2*(logLik(glmer_out6)-logLik(glmer_out7))
+# c(LRT.7,1-pchisq(LRT.7,1))
+
+mod8<-as.data.frame(anova(glmer_out8,glmer_out7, test="LRT")) %>%
+  mutate(Model=c("Model 8","Model 7"),
+         dropped_predictor=c("Species, Garden, subplotID","Species, Garden")) %>%
+  relocate(c(Model, dropped_predictor))
+
+```
+
+Model 9 without bushID.
+
+```{r}
+glmer_out9 <- glmer(tot.vase.days ~ compound + (1|subplotID) + (1|rater), family=poisson(link = "log"), data=d)
+# -2*logLik(glmer_out8)
+# AIC(glmer_out8)
+# BIC(glmer_out8)
+# LRT.8=2*(logLik(glmer_out6)-logLik(glmer_out8))
+# c(LRT.8,1-pchisq(LRT.8,1))
+
+mod9<-as.data.frame(anova(glmer_out9,glmer_out7, test="LRT")) %>%
+  mutate(Model=c("Model 9","Model 7"),
+         dropped_predictor=c("Species, Garden, bushID","Species, Garden")) %>%
+  relocate(c(Model, dropped_predictor))
+
+```
+
+Model 10 without rater.
+
+```{r}
+glmer_out10 <- glmer(tot.vase.days ~ compound + (1|subplotID/bushID), family=poisson(link = "log"), data=d)
+# -2*logLik(glmer_out9)
+# AIC(glmer_out9)
+# BIC(glmer_out9)
+# LRT.9=2*(logLik(glmer_out6)-logLik(glmer_out9))
+# c(LRT.9,1-pchisq(LRT.9,1))
+
+mod10<-as.data.frame(anova(glmer_out10,glmer_out7, test="LRT")) %>%
+  mutate(Model=c("Model 10","Model 7"),
+         dropped_predictor=c("Species, Garden, Rater","Species, Garden")) %>%
+  relocate(c(Model, dropped_predictor))
+```
+```{r modsel}
+
+modselection<-bind_rows(mod1,mod2,mod3,mod4,mod5,mod6,mod7.1,mod7.2,mod8,mod9,mod10) %>%
+  dplyr::rename("Dropped predictor"=dropped_predictor) %>%
+  mutate(npar=as.factor(npar),
+         Df=as.factor(Df))
+
+print(xtable(modselection,digits=c(1,1,1,1,1,1,1,1,2,1,3)),
+      include.rownames=FALSE, file="output_xtables/GI_prolif_mod_sel_BM.tex")
+
+```
+
+
+### Results using model 7
+
+```{r}
+
+p3<-plot(glmer_out7)
+summary(glmer_out7)
+
+# ctrl<-exp(summary(glmer_out)$coeff)[1,1]
+# comp6<-exp(summary(glmer_out)$coeff)[6,1]
+# comp14<-exp(summary(glmer_out)$coeff)[14,1]
+# ctrl*comp6-ctrl
+# ctrl*comp14-ctrl
+
+ctrl1<-exp(summary(glmer_out7)$coeff)[1,1]
+
+glmer_coefficients<-as.data.frame(summary(glmer_out7)$coeff) %>%
+  rownames_to_column("predictor") %>%
+  filter(grepl("compound",predictor)) %>%
+  dplyr::rename(pval=`Pr(>|z|)`) %>%
+  #we want to have p-adjusted (Holm) values for one-sided test H.alt: lambda(compound)>lambda(water)
+  dplyr::mutate(one_sided_pval=ifelse(`z value`>0, pval/2, (1-pval/2)),
+         p_adjusted=p.adjust(one_sided_pval, method="holm"),
+         significant_higher=ifelse(p_adjusted<0.05, T, F),
+         Estimate_days=exp(Estimate)*ctrl1,
+         Std.Error_days=exp(`Std. Error`))
+
+cowplot::plot_grid(
+ggplot(glmer_coefficients %>%
+         mutate(compound=factor(gsub("compound","",predictor), levels=2:15)), 
+       aes(x=compound, y=Estimate, color=p_adjusted<0.05))+
+  geom_hline(yintercept=0, linetype="dashed")+
+  geom_errorbar(aes(ymin=Estimate - `Std. Error`, ymax=Estimate +`Std. Error`), width=0.2)+geom_point(size=3)+theme_bw()+
+  scale_color_manual(values=c("grey","#85ADAC"), name="Adjusted p<0.05")+coord_flip()+
+  ylab(expression(beta["Compound"]))+
+  xlab("Compound")+
+  #scale_()+
+  theme(axis.title.x = element_text(size=15)),
+
+
+ggplot(glmer_coefficients %>%
+         mutate(compound=factor(gsub("compound","",predictor), levels=2:15)), 
+       aes(x=compound, y=Estimate_days, color=p_adjusted<0.05))+
+  geom_hline(yintercept=ctrl1, linetype="dashed")+
+  geom_errorbar(aes(ymin=Estimate_days - Std.Error_days, ymax=Estimate_days +Std.Error_days), width=0.2)+geom_point(size=3)+theme_bw()+
+  scale_color_manual(values=c("grey","#85ADAC"), name="Adjusted p<0.05")+coord_flip()+
+  ylab(expression(beta["Compound"]))+
+  xlab("Compound")+
+  #scale_()+
+  theme(axis.title.x = element_text(size=15))
+)
+
+p4<-ggplot(glmer_coefficients %>%
+         mutate(compound=factor(gsub("compound","",predictor), levels=2:15)), 
+       aes(x=compound, y=Estimate_days, color=p_adjusted<0.05))+
+  geom_hline(yintercept=ctrl1, linetype="dashed")+
+  geom_errorbar(aes(ymin=Estimate_days - Std.Error_days, ymax=Estimate_days +Std.Error_days), width=0.2)+geom_point(size=3)+theme_bw()+
+  scale_color_manual(values=c("grey","#6B0504"), name="Adjusted p<0.05")+coord_flip()+
+  ylab("Rose vase life in days")+
+  xlab("Compound")+
+  theme(legend.position = "top")
+  #scale_()+
+  #theme(axis.title.x = element_text(size=15))
+
+cowplot::plot_grid(p3,p4, scale = c(0.93,0.99), labels = c("A","B"))
+ggsave("figures/mod1_diagn_outcome.pdf", height=4.8, width=8.3)
+
+
+ggsave("figures/mod1_diagnostics.pdf",cowplot::plot_grid(p3), height=3, width=4.5)
+
+ggsave("figures/mod1_outcome.pdf",p4, height=5, width=4.5)
+
+
+```
