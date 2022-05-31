@@ -18,6 +18,11 @@ library(ggplot2)
 library(nlme)
 library(lme4)
 library(bild)
+
+
+#model selection function here
+
+
 ```
 
 ## Count data of rose vase life days. 
@@ -37,6 +42,10 @@ d <- fread('count_data_G6.csv') %>%
          subplotID=as.factor(subplotID),
          bushID=as.factor(bushID)) %>%
   na.omit()
+
+
+#table(d$compound, d$species, d$rater)
+
 ```
 
 Checking the distribution of the Vase Days of the count data. It looks like there is a larger degree of overdispersion than the poisson model currently accounts for (nope, it's just conditional on the compound: the goodfit should be done per compound).
@@ -57,15 +66,17 @@ ggplot(d, aes(x=tot.vase.days, fill=compound))+geom_density(alpha=0.5)+theme(leg
 #   geom_point()
 ggplot(d, aes(x=compound,y=tot.vase.days, fill=compound))+geom_boxplot()+theme(legend.position = "none")
 
+gf_vector<-c()
 for (comp in 1:14){
-  for (sp in 1:2){
-  summary(goodfit(d$tot.vase.days[d$compound==comp & d$species==sp], "poisson"))
-} #all but 1 significant
-}
+# for (sp in 1:2){
+  gf_vector<-c(gf_vector,summary(goodfit(d$tot.vase.days[d$compound==comp], "poisson"))[3])
+} #all significant
+#}
+sum(gf_vector>0.05)
 
 gf <- goodfit(d$tot.vase.days[d$compound==1], "poisson")
 summary(gf)
-plot(gf, type="standing", scale="raw") #I guess the fit would be better if we did it per compound
+plot(gf, type="standing", scale="raw")
 ```
 
 ```{r, glmer}
@@ -88,7 +99,11 @@ overdisp_fun(glmer_out) #quite oki! no significance, yey. i think this might be 
 #https://fukamilab.github.io/BIO202/04-B-binary-data.html#glm_for_count_data
 drop1(glmer_out, test = "Chi")
 
+ranef(glmer_out)
 exp(fixef(glmer_out))
+#confint(glmer_out)
+coef(glmer_out)$compound
+
 
 #diagnostics https://www.ssc.wisc.edu/sscc/pubs/MM/MM_DiagInfer.html
 exp(summary(glmer_out)$coeff)
@@ -169,11 +184,21 @@ ggplot(data = data_full_cc)+
 
 #xtabs(~ garden + subplotID, d_full)
 
-# we add the day as a random effect, because the likelihood to "switch" from
+# we add the day as a random effect, because the likelihood to "switch" from 1 to 0 is day dependent. Each day has it's own intercept which increases with the numbers of day, and this should allow to estimate the differential effect of compounds given the random intercept of each day
 glmer_out_bn <- glmer(fresh ~ compound + species + garden + (1|day) + (1|rater) + (1|subplotID/bushID), family=binomial, data=d_full)
 summary(glmer_out_bn)
-
+print(glmer_out_bn, correlation=T)
+vcov(glmer_out_bn)
 plot(glmer_out_bn)
+ranef(glmer_out_bn)
+
+
+
+#use random slope
+#glmer_out_bn_slope <- glmer(fresh ~ compound + species + garden + (1 + compound|day) + (1|rater) + (1|subplotID/bushID), family=binomial, data=d_full)
+#summary(glmer_out_bn)
+
+library(glmmT)
 
 
 #drop1(glmer_out_bn) this does not converge when dropping species
@@ -201,7 +226,7 @@ library(gee)
 
 gee_inter <- gee(fresh ~ compound*day + species + garden, # + (1|rater) + (1|subplotID/bushID)
                  id=flowerID, family=binomial, data=d_full)
-summary(gee_inter)
+#summary(gee_inter)
 
 ```
 
@@ -351,10 +376,63 @@ plot
 ```
 I fit a linear model to the gaussian outcome data where Compound, Type, Garden and Days are included as fixed effects, a compound and days interaction is included and subplot is included as a random effect. Rater is not included because we only have one rater. 
 
-```{r}
 
+## Model selection
+
+```{r}
+#var.test(dataG_long$subplot ~ 1)
 #g1 <- glm(Width ~ Compound + Type + Garden + Days + Compound*Days + (1 | Subplot), data=dataG_long)
-lme_out <- nlme::lme(width ~ compound + type + garden + days + compound*days, data=dataG_long, random = ~1|subplot, na.action=na.omit)
+lme_out <- lmer(width ~ compound+ days + compound:days + type + garden + (1|subplot/flowerID), data=dataG_long, na.action=na.omit)
+summary(lme_out)
+
+lme_out.1 <- lmer(width ~days + compound:days + type + garden + (1|subplot/flowerID), data=dataG_long, na.action=na.omit)
+summary(lme_out.1)
+anova(lme_out.1,lme_out)
+
+lme_out.2 <- lmer(width ~compound +days+ compound:days + type + garden + (1|subplot/flowerID), data=dataG_long, na.action=na.omit)
+summary(lme_out.2)
+anova(lme_out.2,lme_out)
+
+
+
+#with random slopes
+lme_out2 <- lmer(width ~ compound+ days + compound:days + type + garden +(1+days|subplot/flowerID), data=dataG_long, na.action=na.omit)
+summary(lme_out2) 
+AIC(lme_out2)
+
+anova(lme_out, lme_out2, test="LRT") #lme_out2 better
+
+lme_out3 <- lmer(width ~days + compound:days + type + garden +(1+days|subplot/flowerID), data=dataG_long, na.action=na.omit)
+summary(lme_out3)
+AIC(lme_out3)
+
+anova(lme_out3, lme_out2, test="LRT") # random slope, once with compound, once without
+anova(lme_out3, lme_out, test="LRT") #
+
+#LRT.9=2*(logLik(lme_out3)-logLik(lme_out))
+#c(LRT.9,4-pchisq(LRT.9,1))
+
+anova(lme_out2, lme_out, test="LRT")
+
+
+
+
+
+
+
+
+#testing autoregressive correlation structure AR1
+
+# lme_out2 <- nlme::lme(width ~ compound+ days + compound:days + type + garden + (1|subplot) + (1|flowerID), data=dataG_long, na.action=na.omit)
+# 
+# summary(lme_out)
+# 
+# lme_out_ar1 <- nlme::lme(width ~ compound+ days + compound*days + type + garden, data=dataG_long, random = ~1|subplot, na.action=na.omit, correlation=corAR1())
+# summary(lme_out_ar1)
+
+# AIC(lme_out)
+# AIC(lme_out_ar1)#nope, not better
+
 
 ```
 
