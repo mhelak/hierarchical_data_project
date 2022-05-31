@@ -1,0 +1,270 @@
+---
+title: "Discovering Associations - Gaussian model selection"
+output: pdf_document
+author: ""
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r, include = FALSE}
+#load packages
+library(vcd)
+library(data.table)
+library(tidyverse)
+library(ggplot2)
+library(nlme)
+library(lme4)
+library(bild)
+library(lmerTest)
+```
+
+
+## Gaussian data of flower width.
+
+Gaussian outcome data. We received data from 180 flowers. This was distributed as 12 flowers for each compound for each of the 15 compounds. In each of those groups, there were 6 flowers per species and 6 grown in each garden. There were also 18 different subplots. The number of subplots is greater than the number of number of flowers per group. 
+
+For each of the 18 flowers, we have measurements of the width of the flower over the course of 21 days. All measurements for all flowers were taken by a single rater.
+
+Below I transform the data so that there is a row for each measurement of each flower on each day resulting in 3780 rows. 
+
+```{r, message=FALSE, fig.width=8, fig.height=5}
+
+g <- fread('gaussian_data_G6.csv') 
+#summary(g) #there is only one rater, drop it
+g<-g %>% dplyr::select(-Rater)
+
+
+colnames(g)<-c("flowerID",0:20,"compound","type","garden","subplot")
+
+dataG_long <- gather(g, days, width, "0":"20", factor_key=TRUE) %>%
+      mutate(garden=as.factor(garden),
+             type=as.factor(type),
+             compound=as.factor(compound),
+             subplot=as.factor(subplot),
+             days=as.numeric(days),
+             flowerID=as.factor(flowerID))
+
+head(dataG_long)
+```
+I also added a column showing the change in the width of the flower so that we can see the change in width per day. It is worth noting that the width of the flower does not uniformly increase, instead it does fluctuate from day to day, decreasing occasionally. Also, there are quite a few missing measurements, we probably should have accounted for this in our sample size calculation?
+
+```{r, include = FALSE}
+dataG_combo <- data.table(flowerID = factor(), 
+                          compound = factor(), 
+                          type = factor(),
+                          garden = factor(),
+                          subplot = factor(),
+                          days = integer(),
+                          width = numeric(),
+                          delta_width = numeric())
+
+unique_flowerIDs <- unique(dataG_long$flowerID)
+for (i in unique_flowerIDs) {
+  dataG_subset <- dataG_long[dataG_long$flowerID == i,]
+  dataG_subset$delta_width <- c(0,diff(dataG_subset$width))
+  dataG_combo <- dplyr::union(dataG_combo, dataG_subset)
+}
+```
+
+
+```{r}
+ggplot(dataG_combo[dataG_combo$days==20,], aes(x=compound,y=width, fill=compound))+geom_boxplot()+theme(legend.position = "none")+
+  labs(y = "Width at day 20 (cm)", x= "Compound")
+```
+
+
+
+Below I plotted the individual flower width evolution (per coumpound) and the evolution of the mean flower width by compound. 
+
+```{r}
+ggplot(data = dataG_combo)+
+    geom_line(aes(x = days, y = width, color = flowerID)) +
+  facet_wrap(~compound, ncol=5)+
+  scale_size_discrete(range=c(0.8,1.5),guide="none")+
+  scale_alpha_discrete(range=c(0.65,1), guide="none")+
+  theme_bw()+theme(legend.position = "none")+
+  ylab("Flower width (cm)")+
+  xlab("Day")+labs(title = "Evolution of the individual flower width per coumpound")
+```
+
+
+```{r}
+data_cc <- aggregate(width ~ compound + days, data = dataG_combo, FUN = mean) %>%
+  mutate(water=ifelse(compound==1,T,F))
+
+ggplot(data = data_cc)+
+    geom_line(aes(x = days, y = width, color = compound, size=water, alpha=water)) +
+  scale_size_discrete(range=c(0.8,1.5),guide="none")+
+  scale_alpha_discrete(range=c(0.65,1), guide="none")+
+  theme_bw()+
+  ylab("Mean flower width")+
+  xlab("Day")+labs(title = "Evolution of the mean flower width per coumpound")
+```
+
+The takeaway from this graph is that for each graph, the change in the Width of the flower is not the same for each of the Compounds. 
+
+I fit a linear model to the gaussian outcome data where Compound, Type, Garden and Days are included as fixed effects, a compound and days interaction is included and subplot is included as a random effect. Rater is not included because we only have one rater. 
+
+Initial model.
+
+```{r}
+lme_out1  <- lmer(width ~ compound + type + garden + days + compound:days + (1|subplot)+ (1|flowerID), data=dataG_long)
+summary(lme_out1)
+anova(lme_out1)
+-2*logLik(lme_out1)
+AIC(lme_out1)
+BIC(lme_out1)
+```
+## Model selection
+
+Dropping compound.
+
+```{r}
+lme_out2 <- lmer(width ~ type + garden + days + compound:days + (1|subplot)+ (1|flowerID), data=dataG_long)
+summary(lme_out2)
+anova(lme_out2)
+-2*logLik(lme_out2)
+AIC(lme_out2)
+BIC(lme_out2)
+LRT.2=2*(logLik(lme_out1)-logLik(lme_out2))
+c(LRT.2,1-pchisq(LRT.2,14))
+```
+Dropping species.
+
+```{r}
+lme_out3 <- lmer(width ~ compound + garden + days + compound:days + (1|subplot)+ (1|flowerID), data=dataG_long)
+summary(lme_out3)
+-2*logLik(lme_out3)
+AIC(lme_out3)
+BIC(lme_out3)
+LRT.3=2*(logLik(lme_out1)-logLik(lme_out3))
+c(LRT.3,1-pchisq(LRT.3,1))
+```
+
+Dropping garden.
+
+```{r}
+lme_out4 <- lmer(width ~ compound + type + days + compound:days + (1|subplot)+(1|flowerID), data=dataG_long)
+summary(lme_out4)
+-2*logLik(lme_out4)
+AIC(lme_out4)
+BIC(lme_out4)
+LRT.4=2*(logLik(lme_out1)-logLik(lme_out4))
+c(LRT.4,1-pchisq(LRT.4,1))
+```
+
+Dropping days.
+
+```{r}
+lme_out5 <- lmer(width ~ compound + type + garden + compound:days + (1|subplot)+(1|flowerID), data=dataG_long)
+summary(lme_out5)
+-2*logLik(lme_out5)
+AIC(lme_out5)
+BIC(lme_out5)
+LRT.5=2*(logLik(lme_out1)-logLik(lme_out5))
+c(LRT.5,1-pchisq(LRT.5,0))
+```
+
+Dropping compounds:days.
+
+```{r}
+lme_out6 <- lmer(width ~ compound + type + garden + days + (1|subplot) +(1|flowerID), data=dataG_long)
+summary(lme_out6)
+-2*logLik(lme_out6)
+AIC(lme_out6)
+BIC(lme_out6)
+LRT.6=2*(logLik(lme_out1)-logLik(lme_out6))
+c(LRT.6,1-pchisq(LRT.6,14))
+```
+
+
+Dropping subplot random intercept.
+
+```{r}
+lme_out7 <- lmer(width ~ compound + type + garden + days + compound:days + (1|flowerID), data=dataG_long)
+summary(lme_out7)
+-2*logLik(lme_out7)
+AIC(lme_out7)
+BIC(lme_out7)
+LRT.7=2*(logLik(lme_out1)-logLik(lme_out7))
+c(LRT.7,1-pchisq(LRT.7,1))
+```
+
+Dropping subplot flowerID intercept.
+
+```{r}
+lme_out8 <- lmer(width ~ compound + type + garden + days + compound:days + (1|subplot), data=dataG_long)
+summary(lme_out8)
+-2*logLik(lme_out8)
+AIC(lme_out8)
+BIC(lme_out8)
+LRT.8=2*(logLik(lme_out1)-logLik(lme_out8))
+c(LRT.8,1-pchisq(LRT.8,1))
+```
+
+Testing adding random slopes for flowerID to Model 2. The random slopes are set to be uncorrelated from the flowerID intercept otherwise there are convergence issues (see below Model 11).
+
+```{r}
+lme_out9 <- lmer(width ~ type + garden + days + compound:days + (0+days|flowerID)+(1|flowerID) + (1|subplot), data=dataG_long)
+summary(lme_out9)
+-2*logLik(lme_out9)
+AIC(lme_out9)
+BIC(lme_out9)
+LRT.9=2*(logLik(lme_out9)-logLik(lme_out2))
+c(LRT.9,1-pchisq(LRT.9,1))
+```
+
+Given that a model with random slopes seems to be better we test removing all variables again. Only when dropping random intercept for flowerID the model appears to improve.
+
+
+```{r}
+drop1(lme_out9)
+lme_out10 <- lmer(width ~ type + garden + days + compound:days + (0+days|flowerID) + (1|subplot), data=dataG_long)
+summary(lme_out10)
+-2*logLik(lme_out10)
+AIC(lme_out10)
+BIC(lme_out10)
+LRT.10=2*(logLik(lme_out9)-logLik(lme_out10))
+c(LRT.10,1-pchisq(LRT.10,1))
+```
+
+Similar to model 9, but with correlated random intercept and random slopes for flowerID.
+
+```{r}
+lme_out11 <- lmer(width ~ type + garden + days + compound:days + (1+days|flowerID)+(1|subplot), data=dataG_long)
+summary(lme_out11)
+-2*logLik(lme_out11)
+AIC(lme_out11)
+BIC(lme_out11)
+LRT.11=2*(logLik(lme_out9)-logLik(lme_out11))
+c(LRT.11,1-pchisq(LRT.11,1))
+```
+
+
+# ```{r, lme}
+# lme_coefficients<-as.data.frame(summary(lme_out1)$tTable) %>%
+#   rownames_to_column("predictor_full") %>%
+#   filter(grepl("compound",predictor_full)) %>%
+#   filter(grepl("days",predictor_full)) %>%
+#   #dplyr::rename(pval=`p-value`) %>%
+#   #we want to have p-adjusted (Holm) values for one-sided test H.alt: lambda(compound)>lambda(water)
+#   #dplyr::mutate(one_sided_pval=ifelse(`t-value`<0, pval/2, (1-pval/2)),
+#     dplyr::mutate(p_adjusted=p.adjust(`p-value`, method="holm"),
+#                   significant=ifelse(p_adjusted<0.05, T, F),
+#                   predictor=gsub(":days","",predictor_full)) 
+# 
+# ggplot(lme_coefficients %>%
+#          mutate(compound=factor(gsub("compound|:day","",predictor), levels=2:15)), 
+#        aes(x=compound, y=Value, color=p_adjusted<0.05))+
+#   geom_hline(yintercept=0, linetype="dashed")+
+#   geom_errorbar(aes(ymin=Value - `Std.Error`, ymax=Value +`Std.Error`), width=0.2)+geom_point(size=3)+theme_bw()+
+#   scale_color_manual(values=c("grey","#85ADAC"))+coord_flip()+
+#   ylab(expression(beta["compound*time"]))
+# 
+# # also nice #BEE3DB
+#   
+# ```
+
