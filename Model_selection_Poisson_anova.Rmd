@@ -19,6 +19,7 @@ library(nlme)
 library(lme4)
 #library(bild)
 library(xtable)
+library(multcomp)
 ```
 
 ## Count data of rose vase life days. 
@@ -262,7 +263,7 @@ modselection<-bind_rows(mod1,mod2,mod3,mod4,mod5,mod6,mod7.1,mod7.2,mod8,mod9,mo
          Df=as.factor(Df))
 
 print(xtable(modselection,digits=c(1,1,1,1,1,1,1,1,2,1,3)),
-      include.rownames=FALSE, file="output_xtables/GI_prolif_mod_sel_BM.tex")
+      include.rownames=FALSE, file="output_xtables/modelselection1.tex") #only added additional hlines after this
 
 ```
 
@@ -340,3 +341,55 @@ ggsave("figures/mod1_outcome.pdf",p4, height=5, width=4.5)
 
 
 ```
+
+## Contrasts
+Now do contrasts of the promising compounds.
+
+
+```{r contr}
+#https://stats.stackexchange.com/questions/60352/comparing-levels-of-factors-after-a-glm-in-r
+#https://stat.ethz.ch/~meier/teaching/anova/contrasts-and-multiple-testing.html
+
+wrap_glht_output<-function(glht_output){
+  
+  pq<-summary(glht_output)$test
+  mtests <- cbind(pq$coefficients, pq$sigma, pq$tstat, pq$pvalues)
+  error <- attr(pq$pvalues, "error")
+  pname <- switch(glht_output$alternativ, 
+                  less = paste("Pr(<", ifelse(glht_output$df ==0, "z", "t"), ")", sep = ""), 
+                  greater = paste("Pr(>", ifelse(glht_output$df == 0, "z", "t"), ")", sep = ""), 
+                  two.sided = paste("Pr(>|", ifelse(glht_output$df == 0, "z", "t"), "|)", sep = ""))     
+  colnames(mtests) <- c("Estimate", "Std. Error", ifelse(glht_output$df ==0, "z value", "t value"), pname)
+  return(mtests)
+}
+
+summary(glmer_out7)
+x<-glht(glmer_out7,  linfct=mcp(compound=c("`6` - `14` == 0")))   
+
+mtests1<-wrap_glht_output(x)
+
+xtable(mtests1, digits=4)
+print(xtable(mtests1,digits=c(1,2,3,3,4)), file="output_xtables/mod1_contrast_compound6vs14.tex")
+
+```
+
+```{r get_modtables}
+
+glmer_mainTable<-as.data.frame(summary(glmer_out7)$coeff) %>%
+  rownames_to_column("Predictor") 
+
+print(xtable(glmer_mainTable,digits=c(1,1,2,3,3,4)),
+      include.rownames=FALSE, file="output_xtables/mod1_mainTable.tex")
+
+
+#ranef(glmer_out7)
+#https://stackoverflow.com/questions/8526681/extract-random-effect-variances-from-lme4-mer-model-object
+glmer_randomTable<-as.data.frame(VarCorr(glmer_out7)) %>% dplyr::select(-var2)
+
+print(xtable(glmer_randomTable,digits=c(1,1,1,3,3)),
+      include.rownames=FALSE, file="output_xtables/mod1_randomTable.tex")
+
+```
+
+
+
