@@ -404,13 +404,13 @@ print(xtable(mtests1,digits=c(1,2,3,3,4)), file="output_xtables/mod1_contrast_co
 
 rawCI<-confint(glmer1.emm.s, calc = c(n = ~.wgt.)) %>%
   mutate(Predictor=paste0("compound",compound),
-         Predictor=ifelse(compound==1,"(Intercept)",Predictor))
+         Predictor=ifelse(compound==1,"(Intercept)",Predictor)) #just for crosschecking
 
 glmer_mainTable<-as.data.frame(summary(glmer_out7)$coeff) %>%
   rownames_to_column("Predictor") %>%
   left_join(rawCI %>% dplyr::select(Predictor,n)) %>%
-  mutate(lowerCI=Estimate-qt(0.9,df=n-1)*`Std. Error`,
-         upperCI=Estimate+qt(0.9,df=n-1)*`Std. Error`, #use 0.9 because we are doing a one sided test here
+  mutate(lowerCI=Estimate-qnorm(0.95)*`Std. Error`,
+         upperCI=Estimate+qnorm(0.95)*`Std. Error`, #use 0.9 because we are doing a one sided test here
          n=as.factor(n)) 
   
 print(xtable(glmer_mainTable,digits=c(1,1,2,3,3,4,1,3,3)),
