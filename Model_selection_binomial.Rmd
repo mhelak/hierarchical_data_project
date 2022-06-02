@@ -1,0 +1,196 @@
+---
+title: "Discovering Associations - Model 2"
+output: pdf_document
+author: ""
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r, include = FALSE}
+#load packages
+library(vcd)
+library(data.table)
+library(tidyverse)
+library(ggplot2)
+library(nlme)
+library(lme4)
+library(bild)
+library(geepack)
+library(MuMIn)
+```
+
+## Binomial data of rose vase life days. 
+
+
+Out of 1440 datapoints, we have 60 missing outcomes (total vase days), which is 4.1% of the data.
+More data description, can copy some from simulation description.
+
+```{r, include = FALSE}
+#read in data
+d <- fread('count_data_G6.csv') %>%
+    mutate(garden=as.factor(garden),
+         species=as.factor(species),
+         rater=as.factor(rater),
+         compound=as.factor(compound),
+         subplotID=as.factor(subplotID),
+         bushID=as.factor(bushID)) %>%
+  na.omit()
+```
+
+Fit a longitudinal binary data predicting vase life. First need to transform the data into a binary outcome per day.
+
+```{r lonitudinal_binary}
+
+outmat<-matrix(nrow = nrow(d), ncol=max(d$tot.vase.days))
+
+outmat[is.na(outmat)]<-1
+for (i in 1:nrow(outmat)){
+  outmat[i,c(d[i,tot.vase.days]:25)]<-0
+  outmat[i,d[i,tot.vase.days]]<-1
+
+}
+
+outdf<-as.data.frame(outmat)
+names(outdf)<-paste0("newVar_",names(outdf))
+
+d_full<-d %>%
+  bind_cols(outdf %>% as.data.frame()) %>%
+  pivot_longer(contains("newVar"), names_to="day", values_to = "fresh") %>%
+  mutate(day=as.numeric(gsub("newVar_V","",day)))
+
+data_full_cc <- aggregate(fresh ~ compound + day, data = d_full, FUN = mean) %>%
+  mutate(water=ifelse(compound==1,T,F))
+
+ggplot(data = data_full_cc)+
+  geom_hline(yintercept=0.5, linetype="dashed")+
+  geom_line(aes(x = day, y = fresh, color = compound, size=water, alpha=water)) +
+  scale_size_discrete(range=c(0.7,1.5),guide="none")+
+  scale_alpha_discrete(range=c(0.65,1), guide="none")+
+  theme_bw()+
+  ylab("Proportion of fresh flowers")+
+  xlab("Day")
+
+#included this just to see if all datapoints are there..
+#ggplot(data = data_full_cc)+geom_line(aes(x = day, y = fresh, color = compound))+facet_wrap(~compound)
+```
+
+We test Generalized Estimating Equations (GEEGLM function).
+
+We Consider various specifications for the `working' correlation structure
+Model1 =  Independence
+Model2 =  Exchangeable
+Model3 =  Auto-regressive
+
+```{r}
+gee_out1 <- geeglm(fresh ~ day + day:compound,
+id=flowerID, data=d_full, family="binomial", corstr="independence")
+summary(gee_out1)
+```
+
+For model2 the interaction effects do not show the compound effects observed in the graphs.
+
+```{r}
+gee_out2 <- geeglm(fresh ~ day + day:compound,
+id=flowerID, data=d_full, family="binomial", corstr="exchangeable")
+summary(gee_out2)
+```
+
+```{r}
+gee_out3 <- geeglm(fresh ~ day + day:compound,
+id=flowerID, data=d_full, family="binomial", corstr="ar1")
+summary(gee_out3)
+```
+
+We compare the models using QIC: the auto-regressive working correlation seems to work better.
+
+```{r}
+QIC <- MuMIn::QIC
+model.sel(gee_out1, gee_out2, gee_out3, rank = QIC)
+```
+
+We test more complex models. 
+
+Model4: adding species.
+
+```{r}
+gee_out4 <- geeglm(fresh ~ species + day + day:compound,
+id=flowerID, data=d_full, family="binomial", corstr="ar1")
+```
+
+Model5: adding garden.
+
+```{r}
+gee_out5 <- geeglm(fresh ~ garden + day + day:compound,
+id=flowerID, data=d_full, family="binomial", corstr="ar1")
+```
+
+Model6: adding rater.
+
+```{r}
+gee_out6 <- geeglm(fresh ~ rater + day + day:compound,
+id=flowerID, data=d_full, family="binomial", corstr="ar1")
+summary(gee_out6)
+```
+
+Model7: adding rater and garden.
+
+```{r}
+gee_out7 <- geeglm(fresh ~ rater + garden + day + day:compound,
+id=flowerID, data=d_full, family="binomial", corstr="ar1")
+summary(gee_out7)
+```
+
+```{r}
+model.sel(gee_out1, gee_out2, gee_out3, gee_out4, gee_out5, gee_out6, 
+          gee_out7, rank = QIC)
+```
+
+We compare with a similar model corresponding to Model 7, but using an independence working correlation.
+
+```{r}
+gee_out8 <- geeglm(fresh ~ rater + day + day:compound,
+id=flowerID, data=d_full, family="binomial", corstr="independence")
+summary(gee_out8)
+```
+
+Adding compounds to the model provides a lower QIC but the effect is not anymore present in the interaction term.
+
+```{r}
+gee_out9 <- geeglm(fresh ~ compound + rater + garden + day + day:compound,
+id=flowerID, data=d_full, family="binomial", corstr="ar1")
+summary(gee_out9)
+```
+
+
+```{r}
+model.sel(gee_out1, gee_out2, gee_out3, gee_out4, gee_out5, gee_out6, 
+          gee_out7, gee_out8,gee_out9, rank = QIC)
+```
+
+## Results with model 7
+
+```{r}
+gee_coefficients<-as.data.frame(summary(gee_out7)$coefficients) %>%
+  rownames_to_column("predictor") %>%
+  filter(grepl("day:compound",predictor)) %>%
+  dplyr::rename(pval=`Pr(>|W|)`) %>% 
+  dplyr::mutate(one_sided_pval=ifelse(Estimate>0, pval/2, (1-pval/2)),
+                p_adjusted=p.adjust(one_sided_pval, method="holm"),
+         significant_higher=ifelse(p_adjusted<0.05, T, F))
+
+ggplot(gee_coefficients %>%
+         mutate(compound=factor(gsub("day:compound","",predictor), levels=2:15)), 
+       aes(x=compound, y=Estimate, color=p_adjusted<0.05))+
+  geom_hline(yintercept=0, linetype="dashed")+
+  geom_errorbar(aes(ymin=Estimate - Std.err, ymax=Estimate +Std.err), width=0.2)+geom_point(size=3)+theme_bw()+
+  scale_color_manual(values=c("grey","#6B0504"), name="Adjusted p<0.05")+coord_flip()+
+  ylab("Betas compound:day")+
+  xlab("Compound")+
+  theme(legend.position = "top")
+  #scale_()+
+  #theme(axis.title.x = element_text(size=15))
+
+```
