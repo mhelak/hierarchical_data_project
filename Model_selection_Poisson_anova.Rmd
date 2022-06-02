@@ -20,6 +20,7 @@ library(lme4)
 #library(bild)
 library(xtable)
 library(multcomp)
+library(emmeans)
 ```
 
 ## Count data of rose vase life days. 
@@ -255,6 +256,7 @@ mod10<-as.data.frame(anova(glmer_out10,glmer_out7, test="LRT")) %>%
          dropped_predictor=c("Species, Garden, Rater","Species, Garden")) %>%
   relocate(c(Model, dropped_predictor))
 ```
+
 ```{r modsel}
 
 modselection<-bind_rows(mod1,mod2,mod3,mod4,mod5,mod6,mod7.1,mod7.2,mod8,mod9,mod10) %>%
@@ -275,13 +277,23 @@ print(xtable(modselection,digits=c(1,1,1,1,1,1,1,1,2,1,3)),
 p3<-plot(glmer_out7)
 summary(glmer_out7)
 
+#this is where emmeans package comes in
+glmer1.rg <- ref_grid(glmer_out7)
+glmer1.emm.s <- emmeans(glmer1.rg, "compound")
+
+backcalc<-confint(glmer1.emm.s, level = .9, type = "response") %>%
+  mutate(predictor=paste0("compound",compound))
+
+
 # ctrl<-exp(summary(glmer_out)$coeff)[1,1]
 # comp6<-exp(summary(glmer_out)$coeff)[6,1]
 # comp14<-exp(summary(glmer_out)$coeff)[14,1]
 # ctrl*comp6-ctrl
 # ctrl*comp14-ctrl
-
+ctrl1_noExp<-summary(glmer_out7)$coeff[1,1]
 ctrl1<-exp(summary(glmer_out7)$coeff)[1,1]
+ctrl1_stderr<-exp(summary(glmer_out7)$coeff)[1,2]
+
 
 glmer_coefficients<-as.data.frame(summary(glmer_out7)$coeff) %>%
   rownames_to_column("predictor") %>%
@@ -292,38 +304,53 @@ glmer_coefficients<-as.data.frame(summary(glmer_out7)$coeff) %>%
          p_adjusted=p.adjust(one_sided_pval, method="holm"),
          significant_higher=ifelse(p_adjusted<0.05, T, F),
          Estimate_days=exp(Estimate)*ctrl1,
-         Std.Error_days=exp(`Std. Error`))
+         Std.Error_days=exp(`Std. Error`)*ctrl1_stderr) %>%
+  left_join(backcalc)
+
+#recheck backcalculation
+cor(glmer_coefficients$Estimate_days,glmer_coefficients$rate)
+
+
+pCIs<-ggplot(glmer_coefficients %>%
+         mutate(compound=factor(gsub("compound","",predictor), levels=2:15)), 
+       aes(x=compound, y=Estimate_days, color=p_adjusted<0.05))+
+  geom_hline(yintercept=ctrl1, linetype="dashed")+
+  geom_errorbar(aes(ymin=asymp.LCL, ymax=asymp.UCL), width=0.2)+geom_point(size=3)+theme_bw()+
+  scale_color_manual(values=c("grey","#6B0504"), name="Adjusted p<0.05")+coord_flip()+
+  ylab("Rose vase life in days")+
+  xlab("Compound")+
+  theme(legend.position = "top")
+
 
 cowplot::plot_grid(
 ggplot(glmer_coefficients %>%
          mutate(compound=factor(gsub("compound","",predictor), levels=2:15)), 
-       aes(x=compound, y=Estimate, color=p_adjusted<0.05))+
-  geom_hline(yintercept=0, linetype="dashed")+
-  geom_errorbar(aes(ymin=Estimate - `Std. Error`, ymax=Estimate +`Std. Error`), width=0.2)+geom_point(size=3)+theme_bw()+
-  scale_color_manual(values=c("grey","#85ADAC"), name="Adjusted p<0.05")+coord_flip()+
-  ylab(expression(beta["Compound"]))+
+       aes(x=compound, y=Estimate_days, color=p_adjusted<0.05))+
+  geom_hline(yintercept=ctrl1, linetype="dashed")+
+  geom_errorbar(aes(ymin=Estimate_days - SE, ymax=Estimate_days + SE), width=0.2)+geom_point(size=3)+theme_bw()+
+  scale_color_manual(values=c("grey","#6B0504"), name="Adjusted p<0.05")+coord_flip()+
+  ylab("Rose vase life in days")+
   xlab("Compound")+
-  #scale_()+
-  theme(axis.title.x = element_text(size=15)),
+  theme(legend.position = "top"),
 
 
 ggplot(glmer_coefficients %>%
          mutate(compound=factor(gsub("compound","",predictor), levels=2:15)), 
        aes(x=compound, y=Estimate_days, color=p_adjusted<0.05))+
   geom_hline(yintercept=ctrl1, linetype="dashed")+
-  geom_errorbar(aes(ymin=Estimate_days - Std.Error_days, ymax=Estimate_days +Std.Error_days), width=0.2)+geom_point(size=3)+theme_bw()+
-  scale_color_manual(values=c("grey","#85ADAC"), name="Adjusted p<0.05")+coord_flip()+
-  ylab(expression(beta["Compound"]))+
+  geom_errorbar(aes(ymin=Estimate_days - Std.Error_days, ymax=Estimate_days + Std.Error_days), width=0.2)+geom_point(size=3)+theme_bw()+
+  scale_color_manual(values=c("grey","#6B0504"), name="Adjusted p<0.05")+coord_flip()+
+  ylab("Rose vase life in days")+
   xlab("Compound")+
-  #scale_()+
-  theme(axis.title.x = element_text(size=15))
+  theme(legend.position = "top")
 )
+
 
 p4<-ggplot(glmer_coefficients %>%
          mutate(compound=factor(gsub("compound","",predictor), levels=2:15)), 
        aes(x=compound, y=Estimate_days, color=p_adjusted<0.05))+
   geom_hline(yintercept=ctrl1, linetype="dashed")+
-  geom_errorbar(aes(ymin=Estimate_days - Std.Error_days, ymax=Estimate_days +Std.Error_days), width=0.2)+geom_point(size=3)+theme_bw()+
+  geom_errorbar(aes(ymin=Estimate_days - SE, ymax=Estimate_days +SE), width=0.2)+geom_point(size=3)+theme_bw()+
   scale_color_manual(values=c("grey","#6B0504"), name="Adjusted p<0.05")+coord_flip()+
   ylab("Rose vase life in days")+
   xlab("Compound")+
@@ -375,10 +402,18 @@ print(xtable(mtests1,digits=c(1,2,3,3,4)), file="output_xtables/mod1_contrast_co
 
 ```{r get_modtables}
 
-glmer_mainTable<-as.data.frame(summary(glmer_out7)$coeff) %>%
-  rownames_to_column("Predictor") 
+rawCI<-confint(glmer1.emm.s, calc = c(n = ~.wgt.)) %>%
+  mutate(Predictor=paste0("compound",compound),
+         Predictor=ifelse(compound==1,"(Intercept)",Predictor))
 
-print(xtable(glmer_mainTable,digits=c(1,1,2,3,3,4)),
+glmer_mainTable<-as.data.frame(summary(glmer_out7)$coeff) %>%
+  rownames_to_column("Predictor") %>%
+  left_join(rawCI %>% dplyr::select(Predictor,n)) %>%
+  mutate(lowerCI=Estimate-qt(0.9,df=n-1)*`Std. Error`,
+         upperCI=Estimate+qt(0.9,df=n-1)*`Std. Error`, #use 0.9 because we are doing a one sided test here
+         n=as.factor(n)) 
+  
+print(xtable(glmer_mainTable,digits=c(1,1,2,3,3,4,1,3,3)),
       include.rownames=FALSE, file="output_xtables/mod1_mainTable.tex")
 
 
