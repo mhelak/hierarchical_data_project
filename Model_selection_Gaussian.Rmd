@@ -19,6 +19,8 @@ library(nlme)
 library(lme4)
 library(bild)
 library(lmerTest)
+library(xtable)
+library(multcomp)
 ```
 
 
@@ -71,7 +73,7 @@ for (i in unique_flowerIDs) {
 
 
 ```{r}
-ggplot(dataG_combo[dataG_combo$days==20,], aes(x=compound,y=width, fill=compound))+geom_boxplot()+theme(legend.position = "none")+
+p1=ggplot(dataG_combo[dataG_combo$days==20,], aes(x=compound,y=width, fill=compound))+geom_boxplot()+theme(legend.position = "none")+
   labs(y = "Width at day 20 (cm)", x= "Compound")
 ```
 
@@ -80,14 +82,17 @@ ggplot(dataG_combo[dataG_combo$days==20,], aes(x=compound,y=width, fill=compound
 Below I plotted the individual flower width evolution (per coumpound) and the evolution of the mean flower width by compound. 
 
 ```{r}
-ggplot(data = dataG_combo)+
+p2=ggplot(data = dataG_combo)+
     geom_line(aes(x = days, y = width, color = flowerID)) +
   facet_wrap(~compound, ncol=5)+
   scale_size_discrete(range=c(0.8,1.5),guide="none")+
   scale_alpha_discrete(range=c(0.65,1), guide="none")+
   theme_bw()+theme(legend.position = "none")+
   ylab("Flower width (cm)")+
-  xlab("Day")+labs(title = "Evolution of the individual flower width per coumpound")
+  xlab("Day")
+
+cowplot::plot_grid(p1,p2, rel_widths = c(0.4,0.33), labels = c("A","B"), scale = 0.97)
+ggsave("figures/mod3_overview.pdf", height=4, width=10)
 ```
 
 
@@ -111,160 +116,207 @@ I fit a linear model to the gaussian outcome data where Compound, Type, Garden a
 Initial model.
 
 ```{r}
-lme_out1  <- lmer(width ~ compound + type + garden + days + compound:days + (1|subplot)+ (1|flowerID), data=dataG_long)
-summary(lme_out1)
-anova(lme_out1)
--2*logLik(lme_out1)
-AIC(lme_out1)
-BIC(lme_out1)
+lmer_out  <- lmer(width ~ compound + type + garden + days + compound:days +(1|subplot/flowerID), data=dataG_long)
+summary(lmer_out)
 ```
+```{r}
+lmer_out.rs  <- lmer(width ~ compound + type + garden + days + compound:days +(1+days|subplot/flowerID), data=dataG_long)
+summary(lmer_out.rs)
+-2*logLik(lmer_out.rs)
+AIC(lmer_out.rs)
+BIC(lmer_out.rs)
+anova(lmer_out,lmer_out.rs,refit=FALSE)
+```
+
 ## Model selection
 
 Dropping compound.
 
 ```{r}
-lme_out2 <- lmer(width ~ type + garden + days + compound:days + (1|subplot)+ (1|flowerID), data=dataG_long)
-summary(lme_out2)
-anova(lme_out2)
--2*logLik(lme_out2)
-AIC(lme_out2)
-BIC(lme_out2)
-LRT.2=2*(logLik(lme_out1)-logLik(lme_out2))
-c(LRT.2,1-pchisq(LRT.2,14))
+lmer_out1 <- lmer(width ~ type + garden + days + compound:days + (1|subplot/flowerID), data=dataG_long)
+summary(lmer_out1)
+mod1<-as.data.frame(anova(lmer_out1,lmer_out, test="LRT",refit=FALSE)) %>%
+  mutate(Model=c("Model 1","Full model"),
+         dropped_predictor=c("Compound","-"))%>%
+  relocate(c(Model, dropped_predictor))
 ```
 Dropping species.
 
 ```{r}
-lme_out3 <- lmer(width ~ compound + garden + days + compound:days + (1|subplot)+ (1|flowerID), data=dataG_long)
-summary(lme_out3)
--2*logLik(lme_out3)
-AIC(lme_out3)
-BIC(lme_out3)
-LRT.3=2*(logLik(lme_out1)-logLik(lme_out3))
-c(LRT.3,1-pchisq(LRT.3,1))
+lmer_out2 <- lmer(width ~ compound + garden + days + compound:days + (1|subplot/flowerID), data=dataG_long)
+summary(lmer_out2)
+mod2<-as.data.frame(anova(lmer_out2,lmer_out, test="LRT",refit=FALSE)) %>%
+  mutate(Model=c("Model 2","Full model"),
+         dropped_predictor=c("Species","-"))%>%
+  relocate(c(Model, dropped_predictor))
 ```
 
 Dropping garden.
 
 ```{r}
-lme_out4 <- lmer(width ~ compound + type + days + compound:days + (1|subplot)+(1|flowerID), data=dataG_long)
-summary(lme_out4)
--2*logLik(lme_out4)
-AIC(lme_out4)
-BIC(lme_out4)
-LRT.4=2*(logLik(lme_out1)-logLik(lme_out4))
-c(LRT.4,1-pchisq(LRT.4,1))
+lmer_out3 <- lmer(width ~ compound + type + days + compound:days + (1|subplot/flowerID), data=dataG_long)
+summary(lmer_out3)
+mod3<-as.data.frame(anova(lmer_out3,lmer_out, test="LRT",refit=FALSE)) %>%
+  mutate(Model=c("Model 3","Full model"),
+         dropped_predictor=c("Garden","-"))%>%
+  relocate(c(Model, dropped_predictor))
 ```
 
 Dropping days.
 
 ```{r}
-lme_out5 <- lmer(width ~ compound + type + garden + compound:days + (1|subplot)+(1|flowerID), data=dataG_long)
-summary(lme_out5)
--2*logLik(lme_out5)
-AIC(lme_out5)
-BIC(lme_out5)
-LRT.5=2*(logLik(lme_out1)-logLik(lme_out5))
-c(LRT.5,1-pchisq(LRT.5,0))
+lmer_out4 <- lmer(width ~ compound + type + garden + compound:days + (1|subplot/flowerID), data=dataG_long)
+mod4<-as.data.frame(anova(lmer_out4,lmer_out, test="LRT",refit=FALSE)) %>%
+  mutate(Model=c("Model 4","Full model"),
+         dropped_predictor=c("Days","-"))%>%
+  relocate(c(Model, dropped_predictor))
 ```
 
 Dropping compounds:days.
 
 ```{r}
-lme_out6 <- lmer(width ~ compound + type + garden + days + (1|subplot) +(1|flowerID), data=dataG_long)
-summary(lme_out6)
--2*logLik(lme_out6)
-AIC(lme_out6)
-BIC(lme_out6)
-LRT.6=2*(logLik(lme_out1)-logLik(lme_out6))
-c(LRT.6,1-pchisq(LRT.6,14))
+lmer_out5 <- lmer(width ~ compound + type + garden + days + (1|subplot/flowerID), data=dataG_long)
+summary(lmer_out5)
+mod5<-as.data.frame(anova(lmer_out5,lmer_out, test="LRT",refit=FALSE)) %>%
+  mutate(Model=c("Model 5","Full model"),
+         dropped_predictor=c("Compound:Days","-"))%>%
+  relocate(c(Model, dropped_predictor))
 ```
 
 
 Dropping subplot random intercept.
 
 ```{r}
-lme_out7 <- lmer(width ~ compound + type + garden + days + compound:days + (1|flowerID), data=dataG_long)
-summary(lme_out7)
--2*logLik(lme_out7)
-AIC(lme_out7)
-BIC(lme_out7)
-LRT.7=2*(logLik(lme_out1)-logLik(lme_out7))
-c(LRT.7,1-pchisq(LRT.7,1))
+lmer_out6 <- lmer(width ~ compound + type + garden + days + compound:days + (1|flowerID), data=dataG_long)
+summary(lmer_out6)
+mod6<-as.data.frame(anova(lmer_out6,lmer_out, test="LRT",refit=FALSE)) %>%
+  mutate(Model=c("Model 6","Full model"),
+         dropped_predictor=c("Subplot","-"))%>%
+  relocate(c(Model, dropped_predictor))
 ```
 
 Dropping subplot flowerID intercept.
 
 ```{r}
-lme_out8 <- lmer(width ~ compound + type + garden + days + compound:days + (1|subplot), data=dataG_long)
-summary(lme_out8)
--2*logLik(lme_out8)
-AIC(lme_out8)
-BIC(lme_out8)
-LRT.8=2*(logLik(lme_out1)-logLik(lme_out8))
-c(LRT.8,1-pchisq(LRT.8,1))
+lmer_out7 <- lmer(width ~ compound + type + garden + days + compound:days + (1|subplot), data=dataG_long)
+summary(lmer_out7)
+mod7<-as.data.frame(anova(lmer_out7,lmer_out, test="LRT",refit=FALSE)) %>%
+  mutate(Model=c("Model 7","Full model"),
+         dropped_predictor=c("FlowerID","-"))%>%
+  relocate(c(Model, dropped_predictor))
 ```
 
-Testing adding random slopes for flowerID to Model 2. The random slopes are set to be uncorrelated from the flowerID intercept otherwise there are convergence issues (see below Model 11).
 
-```{r}
-lme_out9 <- lmer(width ~ type + garden + days + compound:days + (0+days|flowerID)+(1|flowerID) + (1|subplot), data=dataG_long)
-summary(lme_out9)
--2*logLik(lme_out9)
-AIC(lme_out9)
-BIC(lme_out9)
-LRT.9=2*(logLik(lme_out9)-logLik(lme_out2))
-c(LRT.9,1-pchisq(LRT.9,1))
-```
-
-Given that a model with random slopes seems to be better we test removing all variables again. Only when dropping random intercept for flowerID the model appears to improve.
 
 
 ```{r}
-drop1(lme_out9)
-lme_out10 <- lmer(width ~ type + garden + days + compound:days + (0+days|flowerID) + (1|subplot), data=dataG_long)
-summary(lme_out10)
--2*logLik(lme_out10)
-AIC(lme_out10)
-BIC(lme_out10)
-LRT.10=2*(logLik(lme_out9)-logLik(lme_out10))
-c(LRT.10,1-pchisq(LRT.10,1))
+modselection<-bind_rows(mod1,mod2,mod3,mod4,mod5,mod6,mod7) %>%
+  dplyr::rename("Dropped predictor"=dropped_predictor) %>%
+  mutate(npar=as.factor(npar),
+         Df=as.factor(Df))
+
+print(xtable(modselection,digits=c(1,1,1,1,1,1,1,1,2,1,3)),
+      include.rownames=FALSE, file="output_xtables/mod3_sel.tex")
 ```
 
-Similar to model 9, but with correlated random intercept and random slopes for flowerID.
+```{r, lme}
+p3<-plot(lmer_out1)
+df <- data.frame(y = resid(lmer_out1))
+p4 <- ggplot(df, aes(sample = y)) + stat_qq() + stat_qq_line()+theme_bw()+   xlab("Theoretical Quantiles") +
+  ylab("Sample Quantiles")
+
+
+
+cowplot::plot_grid(p3,p4, scale = c(1,0.9), labels = c("A","B"))
+ggsave("figures/mod3_diag.pdf", height=4.8, width=8.3)
+
+ctrl1<-summary(lmer_out1)$coeff['days',1]
+lmer_coefficients<-as.data.frame(summary(lmer_out1)$coeff) %>%
+  rownames_to_column("predictor") %>%
+  filter(grepl("days",predictor)) %>%
+  dplyr::rename(pval=`Pr(>|t|)`) %>% 
+  dplyr::mutate(p_adjusted=p.adjust(pval, method="holm"),
+         significant_higher=ifelse(p_adjusted<0.05, T, F),
+         Estimate_width_increm=(Estimate+ctrl1)*20,
+         Std.Error_width=0)
+lmer_coefficients$p_adjusted[1]=1
+lmer_coefficients$Estimate_width_increm[1]=lmer_coefficients$Estimate_width[1]-ctrl1*20
+#Calculation of standard errors based on 
+#https://stats.stackexchange.com/questions/446676/measuring-standard-error-of-two-or-more-coefficients-combined
+lmer_coefficients$Std.Error_width[1]=lmer_coefficients$`Std. Error`[1]*20
+a <- c(0,0,0,1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+for (val in 2:15){
+  a2=a
+  a2[val+3]=1
+  lmer_coefficients$Std.Error_width[val]=sqrt(t(a2) %*% vcov(lmer_out1) %*% a2)*20
+}
+
+lmer_coefficients_plot=lmer_coefficients
+lmer_coefficients_plot$predictor[1]="days:compound1"
+p5<-ggplot(lmer_coefficients_plot %>%
+         mutate(compound=factor(gsub("days:compound|","",predictor), levels=1:15)), 
+       aes(x=compound, y=Estimate_width_increm, color=p_adjusted<0.05))+
+  geom_hline(yintercept=ctrl1*20, linetype="dashed")+
+  geom_errorbar(aes(ymin=Estimate_width_increm - Std.Error_width, ymax=Estimate_width_increm +Std.Error_width), width=0.2)+geom_point(size=1.8)+theme_bw()+
+  scale_color_manual(values=c("grey","#6B0504"), name="Adjusted p<0.05")+coord_flip()+
+  ylab("Rose width increment (cm) after 20 days post-harvest")+
+  xlab("Compound")+
+  theme(legend.position = "top")
+
+ggsave("figures/mod3_outcome.pdf", plot=p5, height=4.8, width=8.3)
+   
+```
+
+## Get Estimates Tables
+
+Tables for the report are generated
+
+```{r get_modtables}
+
+lmer_mainTable<-as.data.frame(summary(lmer_out1)$coeff) %>%
+  rownames_to_column("Predictor") 
+
+lmer_mainTable=dplyr::select(lmer_mainTable, -df)
+
+print(xtable(lmer_mainTable,digits=c(1,1,2,3,3,4)),
+      include.rownames=FALSE, file="output_xtables/mod3_mainTable.tex")
+
+
+#ranef(glmer_out7)
+#https://stackoverflow.com/questions/8526681/extract-random-effect-variances-from-lme4-mer-model-object
+lmer_randomTable<-as.data.frame(VarCorr(lmer_out1)) %>% dplyr::select(-var2)
+
+print(xtable(lmer_randomTable,digits=c(1,1,1,3,3)),
+      include.rownames=FALSE, file="output_xtables/mod3_randomTable.tex")
+
+```
+
+## Contrast
 
 ```{r}
-lme_out11 <- lmer(width ~ type + garden + days + compound:days + (1+days|flowerID)+(1|subplot), data=dataG_long)
-summary(lme_out11)
--2*logLik(lme_out11)
-AIC(lme_out11)
-BIC(lme_out11)
-LRT.11=2*(logLik(lme_out9)-logLik(lme_out11))
-c(LRT.11,1-pchisq(LRT.11,1))
+wrap_glht_output<-function(glht_output){
+  
+  pq<-summary(glht_output)$test
+  mtests <- cbind(pq$coefficients, pq$sigma, pq$tstat, pq$pvalues)
+  error <- attr(pq$pvalues, "error")
+  pname <- switch(glht_output$alternativ, 
+                  less = paste("Pr(<", ifelse(glht_output$df ==0, "z", "t"), ")", sep = ""), 
+                  greater = paste("Pr(>", ifelse(glht_output$df == 0, "z", "t"), ")", sep = ""), 
+                  two.sided = paste("Pr(>|", ifelse(glht_output$df == 0, "z", "t"), "|)", sep = ""))     
+  colnames(mtests) <- c("Estimate", "Std. Error", ifelse(glht_output$df ==0, "z value", "t value"), pname)
+  return(mtests)
+}
+
+x<-glht(lmer_out1,  linfct=c("days:compound6 - days:compound14==0",
+                             "days:compound6 - days:compound2==0",
+                             "days:compound14 - days:compound2==0"))
+mtests1<-wrap_glht_output(x)
+print(xtable(mtests1,digits=c(1,2,3,3,4)), file="output_xtables/mod3_contrast_positive_compounds.tex")
+
+
+x<-glht(lmer_out1,  linfct=c("days:compound4 - days:compound3=0",
+                             "days:compound4 - days:compound8=0",
+                             "days:compound3 - days:compound8=0"))
+nmtests2<-wrap_glht_output(x)
+print(xtable(nmtests2,digits=c(1,2,3,3,4)), file="output_xtables/mod3_contrast_negative_compounds.tex")
 ```
-
-
-# ```{r, lme}
-# lme_coefficients<-as.data.frame(summary(lme_out1)$tTable) %>%
-#   rownames_to_column("predictor_full") %>%
-#   filter(grepl("compound",predictor_full)) %>%
-#   filter(grepl("days",predictor_full)) %>%
-#   #dplyr::rename(pval=`p-value`) %>%
-#   #we want to have p-adjusted (Holm) values for one-sided test H.alt: lambda(compound)>lambda(water)
-#   #dplyr::mutate(one_sided_pval=ifelse(`t-value`<0, pval/2, (1-pval/2)),
-#     dplyr::mutate(p_adjusted=p.adjust(`p-value`, method="holm"),
-#                   significant=ifelse(p_adjusted<0.05, T, F),
-#                   predictor=gsub(":days","",predictor_full)) 
-# 
-# ggplot(lme_coefficients %>%
-#          mutate(compound=factor(gsub("compound|:day","",predictor), levels=2:15)), 
-#        aes(x=compound, y=Value, color=p_adjusted<0.05))+
-#   geom_hline(yintercept=0, linetype="dashed")+
-#   geom_errorbar(aes(ymin=Value - `Std.Error`, ymax=Value +`Std.Error`), width=0.2)+geom_point(size=3)+theme_bw()+
-#   scale_color_manual(values=c("grey","#85ADAC"))+coord_flip()+
-#   ylab(expression(beta["compound*time"]))
-# 
-# # also nice #BEE3DB
-#   
-# ```
-
