@@ -1,0 +1,306 @@
+---
+title: "Discovering Associations - Model 2"
+output: pdf_document
+author: ""
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r, include = FALSE}
+#load packages
+library(vcd)
+library(data.table)
+library(tidyverse)
+library(tibble)
+library(ggplot2)
+library(nlme)
+library(lme4)
+library(bild)
+library(geepack)
+library(MuMIn)
+library(xtable)
+library(multcomp)
+```
+
+## Binomial data of rose vase life days. 
+
+
+Out of 1440 datapoints, we have 60 missing outcomes (total vase days), which is 4.1% of the data.
+More data description, can copy some from simulation description.
+
+```{r, include = FALSE}
+#read in data
+d <- fread('count_data_G6.csv') %>%
+    mutate(garden=as.factor(garden),
+         species=as.factor(species),
+         rater=as.factor(rater),
+         compound=as.factor(compound),
+         subplotID=as.factor(subplotID),
+         bushID=as.factor(bushID)) %>%
+  na.omit()
+```
+
+Fit a longitudinal binary data predicting vase life. First need to transform the data into a binary outcome per day.
+
+```{r lonitudinal_binary}
+
+outmat<-matrix(nrow = nrow(d), ncol=max(d$tot.vase.days))
+
+outmat[is.na(outmat)]<-1
+for (i in 1:nrow(outmat)){
+  outmat[i,c(d[i,tot.vase.days]:25)]<-0
+  outmat[i,d[i,tot.vase.days]]<-1
+
+}
+
+outdf<-as.data.frame(outmat)
+names(outdf)<-paste0("newVar_",names(outdf))
+
+d_full<-d %>%
+  bind_cols(outdf %>% as.data.frame()) %>%
+  pivot_longer(contains("newVar"), names_to="day", values_to = "fresh") %>%
+  mutate(day=as.numeric(gsub("newVar_V","",day)))
+
+data_full_cc <- aggregate(fresh ~ compound + day, data = d_full, FUN = mean) %>%
+  mutate(water=ifelse(compound==1,T,F))
+
+ggplot(data = data_full_cc)+
+  geom_hline(yintercept=0.5, linetype="dashed")+
+  geom_line(aes(x = day, y = fresh, color = compound, size=water, alpha=water)) +
+  scale_size_discrete(range=c(0.7,1.5),guide="none")+
+  scale_alpha_discrete(range=c(0.65,1), guide="none")+
+  theme_bw()+
+  ylab("Proportion of fresh flowers")+
+  xlab("Day")
+ggsave("figures/mod2_overview.pdf", height=4.5, width=6)
+
+#included this just to see if all datapoints are there..
+#ggplot(data = data_full_cc)+geom_line(aes(x = day, y = fresh, color = compound))+facet_wrap(~compound)
+```
+
+We test Generalized Estimating Equations (GEEGLM function).
+
+We Consider various specifications for the `working' correlation structure
+Model1 =  Independence
+Model2 =  Exchangeable
+Model3 =  Auto-regressive
+
+```{r}
+gee_out1 <- geeglm(fresh ~ day + day:compound,
+id=flowerID, data=d_full, family="binomial", corstr="independence")
+summary(gee_out1)
+```
+
+For model2 the interaction effects do not show the compound effects observed in the graphs.
+
+```{r}
+gee_out2 <- geeglm(fresh ~ day + day:compound,
+id=flowerID, data=d_full, family="binomial", corstr="exchangeable")
+summary(gee_out2)
+```
+
+```{r}
+gee_out3 <- geeglm(fresh ~ day + day:compound,
+id=flowerID, data=d_full, family="binomial", corstr="ar1")
+summary(gee_out3)
+```
+
+We compare the models using QIC: the auto-regressive working correlation seems to work better.
+
+```{r}
+QIC <- MuMIn::QIC
+model.sel(gee_out1, gee_out2, gee_out3, rank = QIC)
+```
+
+We test more complex models. 
+
+Model4: adding species.
+
+```{r}
+gee_out4 <- geeglm(fresh ~ species + day + day:compound,
+id=flowerID, data=d_full, family="binomial", corstr="ar1")
+```
+
+Model5: adding garden.
+
+```{r}
+gee_out5 <- geeglm(fresh ~ garden + day + day:compound,
+id=flowerID, data=d_full, family="binomial", corstr="ar1")
+```
+
+Model6: adding rater.
+
+```{r}
+gee_out6 <- geeglm(fresh ~ rater + day + day:compound,
+id=flowerID, data=d_full, family="binomial", corstr="ar1")
+summary(gee_out6)
+```
+
+Model7: adding rater and garden.
+
+```{r}
+gee_out7 <- geeglm(fresh ~ rater + garden + day + day:compound,
+id=flowerID, data=d_full, family="binomial", corstr="ar1")
+summary(gee_out7)
+
+```
+
+```{r}
+model.sel(gee_out1, gee_out2, gee_out3, gee_out4, gee_out5, gee_out6, 
+          gee_out7, rank = QIC)
+```
+
+We compare with a similar model corresponding to Model 7, but using an independence working correlation.
+
+```{r}
+gee_out8 <- geeglm(fresh ~ rater +garden+ day + day:compound,
+id=flowerID, data=d_full, family="binomial", corstr="independence")
+summary(gee_out8)
+
+```
+
+Adding compounds to the model provides a lower QIC but the effect is not anymore present in the interaction term.
+
+```{r}
+gee_out9 <- geeglm(fresh ~ compound + rater + garden + day + day:compound,
+id=flowerID, data=d_full, family="binomial", corstr="ar1")
+summary(gee_out9)
+```
+
+
+```{r}
+modelselection<-model.sel("model 1"=gee_out1, "model 2"=gee_out2, "model 3"=gee_out3,"model 4"= gee_out4, "model 5"=gee_out5, "model 6"=gee_out6,"model 7"=gee_out7,"model 8"=gee_out8,"model 9"=gee_out9, rank = QIC)
+as.data.frame(modelselection)
+dropped_predictor<-c("species","species,compound","species,compound","species,compound,garden",
+                     "species,compound,rater","species,compound,garden,rater","compound,garden,rater",
+                     "species,compound,garden,rater","species,compound,garden,rater")
+
+modelselection[,c(3:7,9)]<-NULL
+model2selection<-add_column(modelselection,"Model"= rownames(modelselection),"Dropped predictor"=dropped_predictor,.before = "(Intercept)")
+
+print(xtable(model2selection,digits=c(1,1,1,1,1,1,1,1,1,1)),
+      include.rownames=FALSE, file="output_xtables/model2selection.tex")
+
+```
+
+## Results with model 7
+
+```{r}
+gee_coefficients<-as.data.frame(summary(gee_out7)$coefficients) %>%
+  rownames_to_column("predictor") %>%
+  filter(grepl("day",predictor)) %>%
+  dplyr::rename(pval=`Pr(>|W|)`) %>% 
+  dplyr::mutate(one_sided_pval=ifelse(Estimate>0, pval/2, (1-pval/2)),
+                p_adjusted=p.adjust(one_sided_pval, method="holm"),
+         significant_higher=ifelse(p_adjusted<0.05, T, F))
+
+gee_coefficients1<-gee_coefficients
+gee_coefficients1[,c(5,8)]<-NULL
+gee.out.tab<-gee_coefficients1%>%
+  dplyr::rename("Pr(>z)" = "one_sided_pval","Holm ad-pvalue" = "p_adjusted","z value"="Wald","Std.Erorr"= "Std.err")
+
+print(xtable(gee.out.tab,digits=c(1,1,3,3,3,3,3)),
+      include.rownames=FALSE, file="output_xtables/gee_output.tex")
+
+
+#ggplot(gee_coefficients %>%
+#         mutate(compound=factor(gsub("day:compound","",predictor), levels=2:15)), 
+#       aes(x=compound, y=Estimate, color=p_adjusted<0.05))+
+#  geom_hline(yintercept=0, linetype="dashed")+
+#  geom_errorbar(aes(ymin=Estimate - Std.err, ymax=Estimate +Std.err), #width=0.2)+geom_point(size=3)+theme_bw()+
+#  scale_color_manual(values=c("grey","#6B0504"), name="Adjusted p<0.05")+coord_flip()+
+#  ylab("Betas compound:day")+
+#  xlab("Compound")+
+#  theme(legend.position = "top")
+#  #scale_()+
+#  #theme(axis.title.x = element_text(size=15))
+
+
+ctrl1<-summary(gee_out7)$coefficients['day',1]
+gee2_coefficients<-as.data.frame(summary(gee_out7)$coefficients) %>%
+  rownames_to_column("predictor") %>%
+  filter(grepl("day",predictor)) %>%
+  dplyr::rename(pval=`Pr(>|W|)`) %>% 
+  dplyr::mutate(one_sided_pval=ifelse(Estimate>0, pval/2, (1-pval/2)),
+                p_adjusted=p.adjust(one_sided_pval, method="holm"),
+                significant_higher=ifelse(p_adjusted<0.05, T, F),
+                Estimate_odds=exp(Estimate+ctrl1),
+                Std.Error_odds=exp(Estimate+Std.err+ctrl1)-exp(Estimate-Std.err+ctrl1),
+                odds_ratio =Estimate_odds/exp(ctrl1))
+gee2_coefficients$Estimate_odds[1]=exp(gee2_coefficients$Estimate[1])
+gee2_coefficients$odds_ratio[1]= exp(gee2_coefficients$Estimate[1])/exp(ctrl1)
+
+gee2_coefficients_plot=gee2_coefficients
+gee2_coefficients_plot$predictor[1]="day:compound1"
+p5<-ggplot(gee2_coefficients_plot %>%
+         mutate(compound=factor(gsub("day:compound|","",predictor), levels=1:15)), 
+       aes(x=compound, y=odds_ratio, color=p_adjusted<0.05))+
+  geom_hline(yintercept=1, linetype="dashed")+
+  geom_errorbar(aes(ymin=odds_ratio - Std.Error_odds, ymax=odds_ratio +Std.Error_odds), width=0.2)+geom_point(size=1.8)+theme_bw()+
+  scale_color_manual(values=c("grey","#6B0504"), name="Adjusted p<0.05")+coord_flip()+
+  ylab("Odds ratio of rose freshness compared to water")+
+  xlab("Compound")+
+  theme(legend.position = "top")
+ggsave("figures/mod2_outcome.pdf", height=4.5, width=6)
+
+```
+
+```{r}
+ctrl1<-summary(gee_out7)$coefficients['day',1]
+gee2_coefficients<-as.data.frame(summary(gee_out7)$coefficients) %>%
+  rownames_to_column("predictor") %>%
+  filter(grepl("day",predictor)) %>%
+  dplyr::rename(pval=`Pr(>|W|)`) %>% 
+  dplyr::mutate(one_sided_pval=ifelse(Estimate>0, pval/2, (1-pval/2)),
+                p_adjusted=p.adjust(one_sided_pval, method="holm"),
+                significant_higher=ifelse(p_adjusted<0.05, T, F),
+                Estimate_odds=exp(Estimate+ctrl1),
+                probfit=Estimate_odds/(1+Estimate_odds),
+                comp_water= probfit/(exp(ctrl1)/(1+exp(ctrl1))),
+                Std.Error_prob=exp(Estimate+ctrl1+Std.err)/(1+exp(Estimate+ctrl1+Std.err))-
+                  exp(Estimate+ctrl1-Std.err)/(1+exp(Estimate+ctrl1-Std.err)))
+#                odds_ratio =Estimate_odds/exp(ctrl1))
+gee2_coefficients$Estimate_odds[1]=exp(gee2_coefficients$Estimate[1])
+gee2_coefficients$probfit[1]= exp(ctrl1)/(1+exp(ctrl1))
+gee2_coefficients$comp_water[1]= 1
+
+gee2_coefficients_plot=gee2_coefficients
+gee2_coefficients_plot$predictor[1]="day:compound1"
+p5<-ggplot(gee2_coefficients_plot %>%
+         mutate(compound=factor(gsub("day:compound|","",predictor), levels=1:15)), 
+       aes(x=compound, y=comp_water, color=p_adjusted<0.05))+
+  geom_hline(yintercept=1, linetype="dashed")+
+  geom_errorbar(aes(ymin=comp_water - Std.Error_prob, ymax=comp_water +Std.Error_prob), width=0.2)+geom_point(size=1.8)+theme_bw()+
+  scale_color_manual(values=c("grey","#6B0504"), name="Adjusted p<0.05")+coord_flip()+
+  ylab("Odds ratio off rose freshness compared to water")+
+  xlab("Compound")+
+  theme(legend.position = "top")
+p5
+```
+
+
+
+```{r}
+wrap_glht_output<-function(glht_output){
+  
+  pq<-summary(glht_output)$test
+  mtests <- cbind(pq$coefficients, pq$sigma, pq$tstat, pq$pvalues)
+  error <- attr(pq$pvalues, "error")
+  pname <- switch(glht_output$alternativ, 
+                  less = paste("Pr(<", ifelse(glht_output$df ==0, "z", "t"), ")", sep = ""), 
+                  greater = paste("Pr(>", ifelse(glht_output$df == 0, "z", "t"), ")", sep = ""), 
+                  two.sided = paste("Pr(>|", ifelse(glht_output$df == 0, "z", "t"), "|)", sep = ""))     
+  colnames(mtests) <- c("Estimate", "Std. Error", ifelse(glht_output$df ==0, "z value", "t value"), pname)
+  return(mtests)
+}
+
+x<-glht(gee_out7,  linfct=c("day:compound6 - day:compound14==0"))
+        
+mtests1<-wrap_glht_output(x)
+print(xtable(mtests1,digits=c(1,2,3,3,4)), file="output_xtables/mod2_contrast.tex")
+
+```
+
